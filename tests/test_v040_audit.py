@@ -149,5 +149,23 @@ class OptInHardened(_Clean):
         self.assertGreaterEqual(o.OPTIN_AUDIT_DROPPED, 25)
 
 
+class ModelSlugsMatchNousCatalog(unittest.TestCase):
+    """Bug: paid ids were bare 'claude-*' in a field named openrouter_id. Nous's catalog
+    (hermes_cli/models_catalog_static.py) lists them as anthropic/claude-*-5.5."""
+
+    def test_paid_openrouter_ids_are_vendor_prefixed(self):
+        import models
+        by_key = {m["key"]: m for m in models.MODELS}
+        for key in ("paid_value", "paid_flagship"):
+            self.assertTrue(by_key[key]["openrouter_id"].startswith("anthropic/"), key)
+
+    def test_every_openrouter_id_is_vendor_slashed_or_router_alias(self):
+        import models
+        for spec in models.MODELS:
+            rid = spec.get("openrouter_id")
+            if rid:
+                self.assertTrue("/" in rid, (spec["key"], rid))
+
+
 if __name__ == "__main__":
     unittest.main()

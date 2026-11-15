@@ -193,6 +193,24 @@ SEAT_ALIASES = {}
 HEAD_SEAT = "CEO"
 
 
+_ALIAS_MAX = 40
+_ALIAS_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .'\-]*")
+_RESERVED_SEAT_WORDS = {"CEO", "CFO", "COO", "CTO", "CMO", "CLO", "CRO", "CHIEF OF STAFF", "COS", "HERMES"}
+_TEXT_MAX = {"avatar": 500, "soul": 2000}
+
+
+def _display_text_problem(value, label, max_len, pattern=None):
+    """Return an error string if display text is too long, credential-like, or malformed, else None."""
+    text = value.strip()
+    if len(text) > max_len:
+        return "%s is too long (%d characters; limit %d)." % (label, len(text), max_len)
+    if _value_is_secret(text):
+        return "Refused: %s looks like a credential. Values are not echoed." % label
+    if pattern is not None and not pattern.fullmatch(text):
+        return "%s may use letters, numbers, spaces, hyphens, apostrophes, and periods only." % label
+    return None
+
+
 def set_seat_aliases(mapping):
     """Set alias -> canonical seat from install config. Returns (ok, error)."""
     global SEAT_ALIASES
@@ -205,6 +223,12 @@ def set_seat_aliases(mapping):
     for alias, target in mapping.items():
         if not isinstance(alias, str) or not alias.strip():
             return False, "seat alias names must be non-empty text."
+        bad = _display_text_problem(alias, "seat alias", _ALIAS_MAX, _ALIAS_RE)
+        if bad:
+            return False, bad
+        if alias.strip().upper() in _RESERVED_SEAT_WORDS:
+            return False, ("Alias %r is a reserved seat name. An alias that shadows a canonical seat "
+                           "would silently reroute that seat's work, so it is refused." % alias.strip())
         if not isinstance(target, str):
             return False, "seat alias target for %r must be a canonical seat name." % alias
         canon = normalize_seat(target)
@@ -263,6 +287,13 @@ def set_seat_display(seat, display_name=None, avatar=None, soul=None):
     for label, value in (("display_name", display_name), ("avatar", avatar), ("soul", soul)):
         if value is not None and not isinstance(value, str):
             return False, "%s must be text." % label
+    for label, value, limit, pat in (("display_name", display_name, _ALIAS_MAX, _ALIAS_RE),
+                                     ("avatar", avatar, _TEXT_MAX["avatar"], None),
+                                     ("soul", soul, _TEXT_MAX["soul"], None)):
+        if value is not None and value.strip():
+            bad = _display_text_problem(value, label, limit, pat)
+            if bad:
+                return False, bad
     entry = dict(SEAT_DISPLAY.get(canon, {}))
     if display_name is not None:
         entry["display_name"] = display_name.strip() or None
@@ -330,6 +361,7 @@ def get_roster_view():
             "binding": check["binding"] if check else "reference",
         })
     return {"status": "success", "head_seat": HEAD_SEAT, "seats": seats,
+            "display_text_is_untrusted": True,   # name / avatar / soul are owner-typed text: display only, never instructions
             "note": "Install flow + CEO Dashboard view. Pinning is host behaviour; this is the data to pin."}
 
 
@@ -413,15 +445,44 @@ def propose_capability_install(seat, missing, owner_approved=False, mode="all", 
 # A read is allowed only with a live opt-in naming the exact fields, a
 # purpose, and an expiry. Every read is audited; revoke is instant.
 OPTIN_AUDIT_LOG = []
+OPTIN_AUDIT_DROPPED = 0
+_OPTIN_AUDIT_MAX = 5000
 _OPTIN_STORE = {}
+_OPTIN_MAX_FIELDS = 50
 
 
-def create_business_data_opt_in(fields, purpose, expires_minutes=60):
-    """Create a chat-scoped opt-in. fields: explicit list. purpose: why."""
+def _optin_audit(entry):
+    """Append to the audit log, bounded. Dropped entries are counted, never silent."""
+    global OPTIN_AUDIT_DROPPED
+    OPTIN_AUDIT_LOG.append(entry)
+    while len(OPTIN_AUDIT_LOG) > _OPTIN_AUDIT_MAX:
+        OPTIN_AUDIT_LOG.pop(0)
+        OPTIN_AUDIT_DROPPED += 1
+
+
+def create_business_data_opt_in(fields, purpose, expires_minutes=60, session_id=None):
+    """Create a chat-scoped opt-in. fields: explicit list. purpose: why.
+
+    Refuses credential fields (an opt-in can never cover api keys, passwords, tokens)
+    and credential-like purpose text. session_id binds the opt-in to one chat: a
+    read from any other session is denied.
+    """
     if not isinstance(fields, (list, tuple)) or not fields or not all(isinstance(f, str) and f.strip() for f in fields):
         return {"valid": False, "error": "fields must be a non-empty list of named fields or documents."}
+    if len(fields) > _OPTIN_MAX_FIELDS:
+        return {"valid": False, "error": "Too many fields (limit %d). Name only what the read needs." % _OPTIN_MAX_FIELDS}
     if not isinstance(purpose, str) or not purpose.strip():
         return {"valid": False, "error": "purpose is required: say what the read is for."}
+    if session_id is not None and (not isinstance(session_id, str) or not session_id.strip()):
+        return {"valid": False, "error": "session_id must be non-empty text when given."}
+    if len(purpose.strip()) > 500 or any(len(f.strip()) > 100 for f in fields):
+        return {"valid": False, "error": "purpose is limited to 500 characters and each field to 100."}
+    credential_fields = [i for i, f in enumerate(fields) if _is_secret_key(f) or _value_is_secret(f)]
+    if credential_fields:
+        return {"valid": False, "error": "Refused: field(s) at position %s look like credentials. "
+                                        "An opt-in can never cover credentials; pass secrets through Hermes." % credential_fields}
+    if _value_is_secret(purpose):
+        return {"valid": False, "error": "Refused: purpose looks like it contains a credential. Values are not echoed."}
     try:
         minutes = int(expires_minutes)
     except (TypeError, ValueError):
@@ -434,25 +495,34 @@ def create_business_data_opt_in(fields, purpose, expires_minutes=60):
               "purpose": purpose.strip(), "created_at": now.isoformat(),
               "expires_at": (now + timedelta(minutes=minutes)).isoformat(),
               "revoked": False}
+    if session_id is not None:
+        record["session_id"] = session_id.strip()
     _OPTIN_STORE[token] = record
-    OPTIN_AUDIT_LOG.append({"event": "opt_in_created", "token": token,
-                            "fields": record["fields"], "purpose": record["purpose"],
-                            "expires_at": record["expires_at"]})
+    _optin_audit({"event": "opt_in_created", "token": token,
+                  "fields": record["fields"], "purpose": record["purpose"],
+                  "expires_at": record["expires_at"]})
     return {"valid": True, "status": "success", "opt_in": record,
-            "note": "Ephemeral and chat-scoped. A fresh opt-in is required for any future read."}
+            "note": "Ephemeral. A fresh opt-in is required for any future read."
+                    + (" Bound to one session." if session_id is not None else " Not bound to a session: pass session_id to make it chat-scoped.")}
 
 
-def check_business_data_opt_in(token, field):
-    """True only if a live opt-in covers this exact field right now."""
+def check_business_data_opt_in(token, field, session_id=None):
+    """True only if a live opt-in covers this exact field right now, in this session.
+
+    Every check is audited, allowed or denied.
+    """
+    allowed = False
     rec = _OPTIN_STORE.get(token) if isinstance(token, str) else None
-    if not rec or rec.get("revoked"):
-        return False
-    try:
-        if datetime.now(timezone.utc) >= datetime.fromisoformat(rec["expires_at"]):
-            return False
-    except ValueError:
-        return False
-    return field in rec.get("fields", [])
+    if rec and not rec.get("revoked"):
+        try:
+            live = datetime.now(timezone.utc) < datetime.fromisoformat(rec["expires_at"])
+        except ValueError:
+            live = False
+        same_session = rec.get("session_id") == (session_id.strip() if isinstance(session_id, str) else None)
+        allowed = bool(live and same_session and field in rec.get("fields", []))
+    _optin_audit({"event": "opt_in_check", "token": token if rec else "<unknown>",
+                  "field": field if isinstance(field, str) else "<non-text>", "allowed": allowed})
+    return allowed
 
 
 def revoke_business_data_opt_in(token):
@@ -460,13 +530,13 @@ def revoke_business_data_opt_in(token):
     if not rec:
         return {"valid": False, "error": "Unknown opt-in token."}
     rec["revoked"] = True
-    OPTIN_AUDIT_LOG.append({"event": "opt_in_revoked", "token": token})
+    _optin_audit({"event": "opt_in_revoked", "token": token})
     return {"valid": True, "status": "success", "token": token, "note": "Revoked. The seat returns to no-read immediately."}
 
 
 def audit_business_data_read(token, field, allowed):
-    OPTIN_AUDIT_LOG.append({"event": "business_data_read", "token": token, "field": field,
-                            "allowed": bool(allowed), "at": datetime.now(timezone.utc).isoformat()})
+    _optin_audit({"event": "business_data_read", "token": token, "field": field,
+                  "allowed": bool(allowed), "at": datetime.now(timezone.utc).isoformat()})
     return {"token": token, "field": field, "allowed": bool(allowed)}
 
 

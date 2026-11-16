@@ -167,5 +167,73 @@ class ModelSlugsMatchNousCatalog(unittest.TestCase):
                 self.assertTrue("/" in rid, (spec["key"], rid))
 
 
+class LadderFindings(unittest.TestCase):
+    """Regressions from the first Hermes test-ladder run (L1-1, L2-2, L2-6, L2-7, L4-1, L5-4)."""
+
+    @staticmethod
+    def run_tool(fn, **args):
+        import json
+        import tools
+        return json.loads(getattr(tools, fn)(args))
+
+    def test_L1_1_brief_is_not_blanket_gated(self):
+        out = self.run_tool("ceo_brief", goal="Grow online subscriptions by 20% this quarter")
+        self.assertFalse(out["approval_required"])
+        self.assertNotIn("approval gate", out["decision_needed"])
+
+    def test_L1_1_brief_still_gates_risky_goal(self):
+        self.assertTrue(self.run_tool("ceo_brief", goal="Pay all vendors today")["approval_required"])
+
+    def test_L4_1_launch_reads_as_external(self):
+        plan = self.run_tool("ceo_orchestrate", goal='Launch the "Winter Blend" subscription box')
+        self.assertIn("external", plan["inferred_risk"])
+        self.assertTrue(plan["steps"][3]["approval_required"])
+
+    def test_launch_cue_does_not_gate_unrelated_work(self):
+        self.assertFalse(self.run_tool("ceo_orchestrate", goal="Summarize last week's metrics")["steps"][3]["approval_required"])
+
+    def test_L2_7_unknown_field_is_reported_not_silently_dropped(self):
+        out = self.run_tool("ceo_assign", task="Draft notes", seat="CFO", due_date="2030-01-01", risk={"external": True})
+        self.assertEqual(out["ignored_fields"], ["risk"])
+        self.assertIn("ceo_tool_call", out["warning"])
+
+    def test_known_fields_produce_no_warning(self):
+        out = self.run_tool("ceo_assign", task="Draft notes", seat="CFO", due_date="2030-01-01")
+        self.assertNotIn("ignored_fields", out)
+        self.assertNotIn("warning", out)
+
+    def test_L2_2_price_email_to_subscribers_not_routed_to_chief_of_staff(self):
+        out = self.run_tool("ceo_route", task="Email all 400 subscribers that prices go up in January.")
+        self.assertIn(out["routed_to"], ("CRO", "CMO"))
+        self.assertTrue(out["approval_required"])
+        self.assertEqual(out["confidence"], "medium")      # three seats matched
+
+    def test_L2_6_single_generic_word_is_not_high_confidence(self):
+        out = self.run_tool("ceo_route", task="Review the proposal for new laptops.")
+        self.assertEqual(out["confidence"], "medium")
+
+    def test_two_term_single_seat_match_stays_high(self):
+        out = self.run_tool("ceo_route", task="Reconcile October books and flag duplicate vendor charges.")
+        self.assertEqual((out["routed_to"], out["confidence"]), ("CFO", "high"))
+
+    def test_L5_4_data_reading_gets_honesty_note(self):
+        for fn, key in (("ceo_brief", "goal"), ("ceo_route", "task"), ("ceo_assign", "task"), ("ceo_orchestrate", "goal")):
+            args = {key: "Read our customer list and summarize churn risk"}
+            if fn == "ceo_assign":
+                args.update(seat="CRO", due_date="2030-01-01")
+            out = self.run_tool(fn, **args)
+            self.assertIn("does not read business data", out["data_access_note"], fn)
+
+    def test_L5_4_exact_ladder_prompt_with_underscore_field_name(self):
+        out = self.run_tool("ceo_route", task="Read our customer_list and summarize churn risk.")
+        self.assertIn("data_access_note", out)
+
+    def test_ordinary_task_has_no_data_note(self):
+        self.assertNotIn("data_access_note", self.run_tool("ceo_route", task="Draft the weekly status update"))
+
+    def test_chro_not_claimed_as_a_seat(self):
+        self.assertNotIn("CHRO", Path(__file__).resolve().parent.parent.joinpath("docs/ARCHITECTURE.md").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

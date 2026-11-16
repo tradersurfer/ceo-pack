@@ -148,7 +148,7 @@ _RISK_CUES = {
     "external": re.compile(
         r"\b(?:send|email|post|publish|announce|submit|tweet|reply|notify|message)\b"
         r"[^.]{0,60}\b(?:client|customer|vendor|investor|press|public|prospect|partner|board|regulator|irs|"
-        r"audience|followers|subscribers|everyone)s?\b|\b(?:publish|announce|go live)\b", re.I),
+        r"audience|followers|subscribers|everyone)s?\b|\b(?:publish|announce|go live|launch(?:ing|es|ed)?|roll(?:ing)? out)\b", re.I),
     "irreversible": re.compile(
         r"\b(?:delete|wipe|destroy|purge|drop\s+(?:table|database)|shut\s?down|decommission|"
         r"cancel\s+(?:the\s+)?(?:account|subscription|contract))\b", re.I),
@@ -165,6 +165,15 @@ _RISK_CUES = {
     "reputation": re.compile(
         r"\b(?:press\s+release|public\s+statement|apolog(?:y|ize)|respond\s+to\s+(?:the\s+)?(?:press|media|review))\b", re.I),
 }
+
+_DATA_ACCESS_CUE = re.compile(
+    r"\b(?:read|pull|scan|analy[sz]e|summari[sz]e|review|check|go through|look (?:at|through))\b[^.]{0,40}"
+    r"\b(?:customer[ _]list|client[ _]list|customer[ _]data|client[ _]data|our (?:books|data|files|crm|inbox|emails?|records)|"
+    r"bank (?:statements?|accounts?)|spreadsheets?|ledger|database|financials)\b", re.I)
+
+DATA_ACCESS_NOTE = ("This plugin does not read business data. Reading it needs an explicit owner opt-in "
+                    "(named fields, purpose, expiry) through Hermes tools, and none is exposed yet. "
+                    "Do not invent figures; ask the owner to paste what the task needs.")
 
 _MAX_DEPTH = 20
 _MAX_JSON_STRING = 100_000
@@ -749,6 +758,14 @@ def find_secret_paths(obj, path="arguments", _depth=0):
             seen.add(h)
             ordered.append(h)
     return ordered
+
+
+def data_access_note(arguments):
+    """DATA_ACCESS_NOTE if the task reads like a request to read business data, else None."""
+    if not isinstance(arguments, dict):
+        return None
+    blob = " . ".join(str(arguments.get(f))[:2000] for f in ("task", "goal") if isinstance(arguments.get(f), str))
+    return DATA_ACCESS_NOTE if _DATA_ACCESS_CUE.search(blob) else None
 
 
 def infer_risk(arguments):

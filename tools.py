@@ -45,8 +45,8 @@ _ROUTE_TERMS = {
     "CLO": r"legal|law|lawsuit|compliance|contracts?|nda|licen[sc]e[sd]?|trademark|liability|terms|regulat\w+|privacy|agreements?|clauses?|signatures?|copyright|patents?",
     "CFO": r"finance|financial|accounting|tax(?:es|ation)?|bookkeeping|books?|budgets?|invoices?|payroll|cash ?flow|expenses?|audit|reconcil\w+|forecast\w*|quarters?|runway|burn rate|dashboards?|metrics|spreadsheets?|kpis?|receipts?|bank|statements?|board|q[1-4]",
     "CTO": r"technology|tech|engineering|software|security|infrastructure|database|code|api|deploy(?:ment)?|bugs?|websites?|checkout|debugg\w*|refactor\w*|errors?|crash\w*|servers?|hosting|domains?",
-    "CRO": r"revenue|sales|pipeline|leads?|prospects?|pricing|quotes?|outreach|prospect\w*|follow[- ]ups?|proposals?|deals?|close|crm|negotiat\w*|support|tickets?|complaints?|churn",
-    "CMO": r"marketing|brand(?:ing)?|content|campaigns?|social media|seo|launch|newsletter|posts?|captions?|blogs?|ads|advertising|funnel|conversions?|landing page",
+    "CRO": r"revenue|sales|pipeline|leads?|prospects?|prices?|pricing|discounts?|quotes?|outreach|prospect\w*|follow[- ]ups?|proposals?|deals?|close|crm|negotiat\w*|support|tickets?|complaints?|churn",
+    "CMO": r"marketing|brand(?:ing)?|content|campaigns?|social media|seo|launch|newsletter|subscribers?|announce\w*|promotions?|posts?|captions?|blogs?|ads|advertising|funnel|conversions?|landing page",
     "Chief of Staff": r"people|hiring|hire|recruit\w*|onboarding|culture|hr|team|summar\w*|briefings?|draft|write|rewrite|proofread|email|meeting notes|action items|interviews?|candidates?|resumes?|screening|job offer",
     "COO (Hermes)": r"operations?|ops|process(?:es)?|logistics|vendors?|schedule|cadence|workflows?|inbox|calendar|extract\w*|documents?|paperwork|monitor\w*|alerts?|sops?|projects?|timeline|deadline|checklists?|suppliers?",
     "CEO": r"strategy|research|vision|priorities|brainstorm\w*|roadmap|goals?|fundrais\w*|investors?|pitch|term sheet|cap table|funding|venture|mission",
@@ -56,10 +56,38 @@ _ROUTE_RE = {seat: re.compile(r"\b(?:%s)\b" % terms, re.I)
              for seat, terms in _ROUTE_TERMS.items()}
 
 
-def _ok(payload):
+def _ok(payload, ignored=None):
     payload = dict(payload)
     payload.setdefault("status", "success")
+    if ignored:
+        payload["ignored_fields"] = ignored
+        payload["warning"] = ("Ignored unknown field(s): %s. They had no effect, including any risk or "
+                              "approval flags. Use ceo_tool_call to pass risk flags." % ", ".join(ignored))
     return json.dumps(payload)
+
+
+def _ignored(tool_name, args):
+    """Names of supplied fields the tool's schema does not declare (they are otherwise dropped silently)."""
+    try:
+        try:
+            from . import schemas
+        except ImportError:
+            import schemas
+        for value in vars(schemas).values():
+            if isinstance(value, dict) and value.get("name") == tool_name:
+                props = (value.get("parameters") or value.get("input_schema") or {}).get("properties")
+                if isinstance(props, dict):
+                    return sorted(k for k in args if k not in props)
+    except Exception:
+        pass
+    return []
+
+
+def _with_data_note(payload, args):
+    note = _orch().data_access_note(args)
+    if note:
+        payload["data_access_note"] = note
+    return payload
 
 
 def _err(message):
@@ -119,11 +147,12 @@ def ceo_brief(args, **kwargs):
     business, e = _text(args, "business_name", required=False)
     if e:
         return e
+    inferred = _orch().infer_risk({"goal": goal})
     return _ok(
-        {
+        _with_data_note({
             "goal": goal,
             "business_name": business or None,
-            "decision_needed": "Owner to confirm the goal, the budget, and the approval gate.",
+            "decision_needed": "Owner to confirm the goal and the budget before work is assigned.",
             "workstreams": [
                 {"seat": "CEO", "job": "Hold priorities and the decision log."},
                 {"seat": "CFO", "job": "Numbers, costs, and financial impact."},
@@ -132,10 +161,10 @@ def ceo_brief(args, **kwargs):
                 {"seat": "CMO", "job": "Market, brand, and customer message."},
                 {"seat": "CLO", "job": "Legal, contracts, and compliance."},
             ],
-            "inferred_risk": _orch().infer_risk({"goal": goal}),
-            "approval_required": True,
+            "inferred_risk": inferred,
+            "approval_required": bool(inferred),   # planning is Type 2; only risky wording gates
             "next_step": "Assign one owner and one due date per workstream with ceo_assign.",
-        }
+        }, args), ignored=_ignored("ceo_brief", args)
     )
 
 
@@ -179,7 +208,7 @@ def ceo_assign(args, **kwargs):
     }
     if note:
         payload["warning"] = note
-    return _ok(payload)
+    return _ok(_with_data_note(payload, args), ignored=_ignored("ceo_assign", args))
 
 
 def ceo_decision_log(args, **kwargs):
@@ -220,7 +249,7 @@ def ceo_decision_log(args, **kwargs):
     }
     if forced:
         payload["gate_note"] = "needs_approval was set to false but the wording reads as Type 1, so approval is required."
-    return _ok(payload)
+    return _ok(_with_data_note(payload, args), ignored=_ignored("ceo_decision_log", args))
 
 
 def ceo_route(args, **kwargs):
@@ -255,13 +284,14 @@ def ceo_route(args, **kwargs):
             seat = leaders[0]
             matched = scores[seat]
             consult = [n for n in _ROUTE_PRIORITY if n in scores and n != seat]
-            confidence = "high" if len(leaders) == 1 else "medium"
+            # one generic word is a weak signal: "high" needs a single leader AND at least two matched terms
+            confidence = "high" if (len(leaders) == 1 and len(matched) >= 2) else "medium"
             why = "Best whole-word match in the task. CEO retains accountability for the integrated result."
         else:
             seat, confidence = "CEO", "low"
             why = "No domain terms matched, so the CEO holds it. Pass domain to route explicitly."
     return _ok(
-        {
+        _with_data_note({
             "task": task,
             "domain": domain or None,
             "routed_to": seat,
@@ -271,7 +301,7 @@ def ceo_route(args, **kwargs):
             "why": why,
             "inferred_risk": inferred,
             "approval_required": bool(inferred),
-        }
+        }, args), ignored=_ignored("ceo_route", args)
     )
 
 
@@ -529,7 +559,7 @@ def ceo_orchestrate(args, **kwargs):
         plan = _orch().plan_tool_calls(goal, model_key)
     except Exception as exc:  # pragma: no cover - fallback for direct import
         return _err(f"Orchestration unavailable: {exc}")
-    return _ok(plan)
+    return _ok(_with_data_note(plan, args), ignored=_ignored("ceo_orchestrate", args))
 
 
 def ceo_choose_model(args, **kwargs):

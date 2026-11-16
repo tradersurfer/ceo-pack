@@ -138,7 +138,7 @@ Rules for core files:
 ```
 CEO Agent Core
     ↓ supervises
-    ├── CFO Agent, Hermes/COO, CTO Agent, CMO Agent, CHRO Agent, CLO Agent
+    ├── CFO Agent, Hermes/COO, CTO Agent, CMO Agent, Chief of Staff Agent (people), CLO Agent
     ↓ some department heads supervise
     └── VP of Sales, Onboarding Comms Agent (Marketing)
     ↓ automatable agents are callable via

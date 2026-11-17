@@ -74,7 +74,7 @@ MODELS = [
     {
         "key": "paid_flagship",
         "label": "Paid override — high stakes only",
-        "openrouter_id": "claude-opus-5.5",
+        "openrouter_id": "anthropic/claude-opus-5.5",
         "zen_id": None,
         "size": "Flagship",
         "context": "Check live provider page",
@@ -86,7 +86,7 @@ MODELS = [
     {
         "key": "paid_value",
         "label": "Paid value — everyday frontier",
-        "openrouter_id": "claude-sonnet-5.5",
+        "openrouter_id": "anthropic/claude-sonnet-5.5",
         "zen_id": None,
         "size": "Flagship-class, lighter",
         "context": "Check live provider page",

@@ -9,8 +9,8 @@ Default: **Nemotron 3 Ultra free** — `nvidia/nemotron-3-ultra-550b-a55b:free` 
 | free_worker | nvidia/nemotron-3.5-lightning:free | Narrow worker jobs |
 | free_worker_2 | inclusionai/ling-3.1-flash:free | Narrow worker jobs — re-verify live; bare ling-3.1-flash is PAID (price varies by provider), only :free is free |
 | free_random | openrouter/free | Fallback, random free with tool-calling filter |
-| paid_value | claude-sonnet-5.5 | Everyday frontier, when free limits bite |
-| paid_flagship | claude-opus-5.5 | High stakes only, override not default |
+| paid_value | anthropic/claude-sonnet-5.5 | Everyday frontier, when free limits bite |
+| paid_flagship | anthropic/claude-opus-5.5 | High stakes only, override not default |
 
 Caveats, from that same check, that users must see:
 - Live re-check Nov 5, 2026: Nemotron 3 Ultra free slug confirmed still $0 / 1M / tool-calling and answering test calls Nov 3; GLM-5.3-Flash Free still listed on Zen (zero retention, 200K context in OpenCode, free for a limited time); Lightning slug corrected to `nvidia/nemotron-3.5-lightning:free`; `inclusionai/ling-3.0-flash` is paid, not free — worker 2 is now `inclusionai/ling-3.1-flash:free` (v0.4.0 fix: bare ID is paid, re-verify live).

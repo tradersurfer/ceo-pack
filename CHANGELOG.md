@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+- Harden seat aliases, display text, and opt-in reading: alias lookalike guard, opt-in session/secrets/fingerprint audit, canonical seats never change.
+- Paid OpenRouter slugs now use `anthropic/` prefix (matches Nous catalog); model pins verified with tests.
+- Ladder run 1 findings applied: brief gate on ambiguous goals, launch cue for head seat, ignored-field warnings on unknown config keys, router precision improvements, data-access note on opt-in reads, CHRO doc updated.
+- Install config applied via `ctx.get_config`; 7 previously-dead settings now wired (head_seat, head_profile, alias_*, cost_mode, model_provider).
+- Tests: 104 router regression tests in tests/test_v041_router.py, all passing.
+
 ## 0.4.0
 - FIXED router (Hermes live test P0): whole-word matching with per-seat priority, matched terms, also-consult, and confidence. "Review the supplier contract" now routes to CLO, "Fix the checkout bug" to CTO, "Close the books" / "Reconcile books" to CFO. "Review the proposal for new laptops" no longer routes to COO. Unmatched tasks go to CEO at low confidence instead of silently claiming a domain match.
 - FIXED verify / assign status mismatch (Hermes live test P0): every real tool result now verifies clean with default expected fields per tool. ceo_assign, ceo_brief, ceo_route, q4_closeout_checklist, ceo_orchestrate, and ceo_choose_model all return status success; gated decision logs return needs_approval and stop for the owner. A validated envelope is still not a completion.

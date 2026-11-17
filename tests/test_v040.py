@@ -353,16 +353,16 @@ class CapabilityCheck(unittest.TestCase):
 
 class OptInBusinessData(unittest.TestCase):
     def test_opt_in_lifecycle(self):
-        created = o.create_business_data_opt_in(["Harbor & Pine Q4 sales"], "Q4 closeout brief", expires_minutes=60)
+        created = o.create_business_data_opt_in(["Harbor & Pine Q4 sales"], "Q4 closeout brief", expires_minutes=60, session_id="chat-1")
         self.assertTrue(created["valid"])
         token = created["opt_in"]["token"]
-        self.assertTrue(o.check_business_data_opt_in(token, "Harbor & Pine Q4 sales"))
-        self.assertFalse(o.check_business_data_opt_in(token, "Other business bank statements"))
+        self.assertTrue(o.check_business_data_opt_in(token, "Harbor & Pine Q4 sales", session_id="chat-1"))
+        self.assertFalse(o.check_business_data_opt_in(token, "Other business bank statements", session_id="chat-1"))
         o.audit_business_data_read(token, "Harbor & Pine Q4 sales", True)
         self.assertTrue(any(e.get("event") == "business_data_read" for e in o.OPTIN_AUDIT_LOG))
         revoked = o.revoke_business_data_opt_in(token)
         self.assertTrue(revoked["valid"])
-        self.assertFalse(o.check_business_data_opt_in(token, "Harbor & Pine Q4 sales"))
+        self.assertFalse(o.check_business_data_opt_in(token, "Harbor & Pine Q4 sales", session_id="chat-1"))
 
     def test_opt_in_requires_fields_and_purpose(self):
         self.assertFalse(o.create_business_data_opt_in([], "x")["valid"])

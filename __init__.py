@@ -86,39 +86,45 @@ def _q4_command(raw_args):
     )
 
 
-def _apply_install_config(ctx):
-    """Read seat aliases + head seat from install config, if the host exposes it."""
+def _read_install_config(ctx):
+    """Read declared settings through the real Hermes API, ctx.get_config(key).
+
+    Older hosts that expose a plain dict (config / settings / plugin_config) are still honoured.
+    """
     try:
         from . import orchestration
     except ImportError:
         import orchestration
     cfg = {}
-    for attr in ("config", "settings", "plugin_config"):
-        cfg = getattr(ctx, attr, None) or {}
-        if isinstance(cfg, dict) and cfg:
-            break
-    if not isinstance(cfg, dict):
-        return
-    aliases = {}
-    for seat in orchestration.SEATS:
-        key = "alias_" + seat.lower().replace(" ", "_")
-        val = cfg.get(key)
-        if isinstance(val, str) and val.strip():
-            aliases[val.strip()] = seat
-    named = cfg.get("seat_names")
-    if isinstance(named, dict):
-        for alias, seat in named.items():
-            if isinstance(alias, str) and isinstance(seat, str):
-                aliases[alias.strip()] = seat
-    if aliases:
-        ok, err = orchestration.set_seat_aliases(aliases)
-        if not ok:
-            logger.warning("CEO Pack: seat aliases refused: %s", err)
-    head = cfg.get("head_seat")
-    if isinstance(head, str) and head.strip():
-        ok, err = orchestration.set_head_seat(head)
-        if not ok:
-            logger.warning("CEO Pack: head seat refused: %s", err)
+    getter = getattr(ctx, "get_config", None)
+    if callable(getter):
+        for key in orchestration.CONFIG_KEYS + ("seat_names",):
+            try:
+                value = getter(key, None)
+            except Exception:
+                value = None
+            if value is not None:
+                cfg[key] = value
+    if not cfg:
+        for attr in ("config", "settings", "plugin_config"):
+            legacy = getattr(ctx, attr, None)
+            if isinstance(legacy, dict) and legacy:
+                cfg = legacy
+                break
+    return cfg
+
+
+def _apply_install_config(ctx):
+    """Apply every declared install setting; log what was applied and what was refused."""
+    try:
+        from . import orchestration
+    except ImportError:
+        import orchestration
+    applied, notes = orchestration.apply_install_config(_read_install_config(ctx))
+    if applied:
+        logger.info("CEO Pack install config applied: %s", ", ".join(applied))
+    for note in notes:
+        logger.warning("CEO Pack install config: %s", note)
 
 
 def register(ctx):

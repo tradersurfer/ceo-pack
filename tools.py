@@ -148,10 +148,12 @@ def ceo_brief(args, **kwargs):
     if e:
         return e
     inferred = _orch().infer_risk({"goal": goal})
+    install = _orch().INSTALL
     return _ok(
         _with_data_note({
             "goal": goal,
-            "business_name": business or None,
+            "business_name": business or install["business_name"] or None,
+            "owner": install["owner_name"] or None,
             "decision_needed": "Owner to confirm the goal and the budget before work is assigned.",
             "workstreams": [
                 {"seat": "CEO", "job": "Hold priorities and the decision log."},
@@ -552,7 +554,7 @@ def ceo_orchestrate(args, **kwargs):
         if raw is None or (isinstance(raw, str) and not raw.strip()):
             return _err("No goal provided")
         return e
-    model_key = args.get("model_key", "free_default")
+    model_key = args.get("model_key", _orch().INSTALL["model_choice"])
     if not isinstance(model_key, str):
         return _err("model_key must be text.")
     try:
@@ -567,8 +569,8 @@ def ceo_choose_model(args, **kwargs):
     if bad:
         return bad
     task_type = args.get("task_type", "ceo")
-    budget = args.get("budget", "free")
-    provider = args.get("provider", "auto")
+    budget = args.get("budget", _orch().INSTALL["cost_mode"])
+    provider = args.get("provider", _orch().INSTALL["model_provider"])
     if not all(isinstance(v, str) for v in (task_type, budget, provider)):
         return _err("task_type, budget, and provider must be text.")
     try:

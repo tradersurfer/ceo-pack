@@ -92,19 +92,19 @@ class DisplayTextGuarded(_Clean):
 class OptInHardened(_Clean):
     def test_credential_fields_refused(self):
         for f in ("api_key", "bank_password", "Access Token", "private_key", FAKE_SK):
-            r = o.create_business_data_opt_in(["customer_list", f], "Quarterly review")
+            r = o.create_business_data_opt_in(["customer_list", f], "Quarterly review", session_id="s")
             self.assertFalse(r["valid"], f)
             self.assertNotIn("abcdefghijklmnop", str(r))
 
     def test_secret_purpose_refused_not_echoed(self):
-        r = o.create_business_data_opt_in(["customer_list"], "check balance with " + FAKE_SK)
+        r = o.create_business_data_opt_in(["customer_list"], "check balance with " + FAKE_SK, session_id="s")
         self.assertFalse(r["valid"])
         self.assertNotIn("abcdefghijklmnop", str(r))
 
     def test_bounds(self):
-        self.assertFalse(o.create_business_data_opt_in(["f%d" % i for i in range(51)], "p")["valid"])
-        self.assertFalse(o.create_business_data_opt_in(["f"], "p" * 501)["valid"])
-        self.assertFalse(o.create_business_data_opt_in(["f" * 101], "p")["valid"])
+        self.assertFalse(o.create_business_data_opt_in(["f%d" % i for i in range(51)], "p", session_id="s")["valid"])
+        self.assertFalse(o.create_business_data_opt_in(["f"], "p" * 501, session_id="s")["valid"])
+        self.assertFalse(o.create_business_data_opt_in(["f" * 101], "p", session_id="s")["valid"])
 
     def test_session_binding(self):
         r = o.create_business_data_opt_in(["customer_list"], "Quarterly review", session_id="chat-A")
@@ -113,10 +113,32 @@ class OptInHardened(_Clean):
         self.assertFalse(o.check_business_data_opt_in(tok, "customer_list", session_id="chat-B"))
         self.assertFalse(o.check_business_data_opt_in(tok, "customer_list"))
 
-    def test_unbound_opt_in_says_so(self):
-        r = o.create_business_data_opt_in(["customer_list"], "Quarterly review")
-        self.assertIn("Not bound", r["note"])
-        self.assertTrue(o.check_business_data_opt_in(r["opt_in"]["token"], "customer_list"))
+    def test_session_is_mandatory(self):
+        for sid in (None, "", "   ", 5):
+            r = o.create_business_data_opt_in(["customer_list"], "Quarterly review", session_id=sid)
+            self.assertFalse(r["valid"], repr(sid))
+            self.assertIn("session_id is required", r["error"])
+        self.assertEqual(o._OPTIN_STORE, {})
+
+    def test_token_is_unguessable_and_unique(self):
+        toks = {o.create_business_data_opt_in(["customer_list"], "Quarterly review", session_id="s")["opt_in"]["token"]
+                for _ in range(50)}
+        self.assertEqual(len(toks), 50)                       # same inputs, 50 different tokens
+        self.assertTrue(all(len(t) >= 30 for t in toks))
+
+    def test_audit_never_stores_raw_token_or_session(self):
+        r = o.create_business_data_opt_in(["customer_list"], "Quarterly review", session_id="chat-secret-id")
+        tok = r["opt_in"]["token"]
+        o.check_business_data_opt_in(tok, "customer_list", session_id="chat-secret-id")
+        o.revoke_business_data_opt_in(tok)
+        dump = str(o.OPTIN_AUDIT_LOG)
+        self.assertNotIn(tok, dump)
+        self.assertNotIn("chat-secret-id", dump)
+
+    def test_every_audit_record_is_timestamped(self):
+        o.create_business_data_opt_in(["customer_list"], "Quarterly review", session_id="s")
+        o.check_business_data_opt_in("bogus", "x", session_id="s")
+        self.assertTrue(o.OPTIN_AUDIT_LOG and all("at" in e for e in o.OPTIN_AUDIT_LOG))
 
     def test_exact_field_only_and_revoke(self):
         r = o.create_business_data_opt_in(["customer_list"], "Quarterly review", session_id="s")
@@ -140,7 +162,7 @@ class OptInHardened(_Clean):
         o.check_business_data_opt_in("bogus-token", "x")
         checks = [e for e in o.OPTIN_AUDIT_LOG[before:] if e["event"] == "opt_in_check"]
         self.assertEqual([e["allowed"] for e in checks], [True, False, False])
-        self.assertEqual(checks[2]["token"], "<unknown>")      # an unknown token is never echoed back
+        self.assertEqual(checks[2]["token_fp"], "<unknown>")      # an unknown token is never echoed back
 
     def test_audit_log_is_bounded_and_drops_are_counted(self):
         for _ in range(o._OPTIN_AUDIT_MAX + 25):
@@ -233,6 +255,123 @@ class LadderFindings(unittest.TestCase):
 
     def test_chro_not_claimed_as_a_seat(self):
         self.assertNotIn("CHRO", Path(__file__).resolve().parent.parent.joinpath("docs/ARCHITECTURE.md").read_text())
+
+
+class InstallConfigApplied(unittest.TestCase):
+    """Bug: _apply_install_config guessed ctx.config/settings/plugin_config, which the real Hermes
+    PluginContext does not have (it exposes ctx.get_config(key, default)), so nothing was applied.
+    Seven declared settings were also never read by any code."""
+
+    class RealShapeCtx:
+        def __init__(self, cfg):
+            self._cfg = cfg
+
+        def get_config(self, key, default=None):
+            return self._cfg.get(key, default)
+
+    @staticmethod
+    def _load_pkg():
+        import importlib.util
+        root = Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location("ceo_pack_cfg_test", root / "__init__.py",
+                                                      submodule_search_locations=[str(root)])
+        pkg = importlib.util.module_from_spec(spec)
+        sys.modules["ceo_pack_cfg_test"] = pkg
+        spec.loader.exec_module(pkg)
+        return pkg
+
+    def setUp(self):
+        self._reset()
+
+    def tearDown(self):
+        self._reset()
+
+    @staticmethod
+    def _reset():
+        o.reset_install_config()
+        o.set_seat_aliases({})
+        o.set_head_seat("CEO")
+        o.SEAT_BINDINGS.clear()
+
+    def test_real_shaped_ctx_applies_aliases_and_head_seat(self):
+        pkg = self._load_pkg()
+        pkg._apply_install_config(self.RealShapeCtx({"alias_coo": "Poseidon", "head_seat": "CFO"}))
+        po = sys.modules["ceo_pack_cfg_test.orchestration"]    # the package's own module instance
+        self.assertEqual(po.normalize_seat("Poseidon"), "COO")
+        self.assertEqual(po.HEAD_SEAT, "CFO")
+
+    def test_legacy_dict_ctx_still_honoured(self):
+        pkg = self._load_pkg()
+
+        class Legacy:
+            config = {"alias_cmo": "Muse"}
+        pkg._apply_install_config(Legacy())
+        po = sys.modules["ceo_pack_cfg_test.orchestration"]
+        self.assertEqual(po.normalize_seat("Muse"), "CMO")
+
+    def test_ctx_without_any_config_is_harmless(self):
+        self._load_pkg()._apply_install_config(object())
+        self.assertEqual(sys.modules["ceo_pack_cfg_test.orchestration"].INSTALL["cost_mode"], "free")
+
+    def test_all_declared_settings_are_applied(self):
+        applied, notes = o.apply_install_config({
+            "business_name": "Harbor Lane Coffee Co.", "owner_name": "Sam Rivera", "cost_mode": "paid_value",
+            "model_provider": "openrouter", "model_choice": "free_fallback", "head_seat": "COO", "head_profile": "ops-agent"})
+        self.assertEqual(notes, [])
+        for k in ("business_name", "owner_name", "cost_mode", "model_provider", "model_choice", "head_seat", "head_profile"):
+            self.assertIn(k, applied)
+        self.assertEqual(o.SEAT_BINDINGS["COO"]["profile"], "ops-agent")
+
+    def test_every_declared_yaml_key_is_known_to_the_loader(self):
+        import re
+        yaml_text = (Path(__file__).resolve().parent.parent / "plugin.yaml").read_text()
+        block = yaml_text.split("config_schema:")[1]
+        declared = set(re.findall(r"^  ([a-z_]+): \{type", block, re.M))
+        self.assertTrue(declared)
+        self.assertEqual(declared - set(o.CONFIG_KEYS), set(), "declared in plugin.yaml but not applied by code")
+
+    def test_invalid_values_refused_and_previous_kept(self):
+        o.apply_install_config({"cost_mode": "paid_value"})
+        applied, notes = o.apply_install_config({"cost_mode": "platinum", "model_choice": "nope",
+                                                 "model_provider": "Bad Provider!", "business_name": FAKE_SK})
+        self.assertEqual(applied, [])
+        self.assertEqual(len(notes), 4)
+        self.assertEqual(o.INSTALL["cost_mode"], "paid_value")
+        self.assertNotIn("abcdefghijklmnop", str(notes))
+
+    def test_approval_required_false_is_reported_not_obeyed(self):
+        _, notes = o.apply_install_config({"approval_required": False})
+        self.assertTrue(any("NOT applied" in n for n in notes))
+        env = o.make_tool_call("ceo_assign", {"task": "Pay the vendor invoice", "seat": "CFO", "due_date": "2030-01-01"})
+        self.assertTrue(env["approval_required"])
+
+    def test_settings_change_tool_defaults(self):
+        import json
+        import tools
+        o.apply_install_config({"business_name": "Harbor Lane Coffee Co.", "owner_name": "Sam Rivera",
+                                "cost_mode": "paid_value", "model_provider": "openrouter", "model_choice": "free_fallback"})
+        brief = json.loads(tools.ceo_brief({"goal": "Grow subscriptions"}))
+        self.assertEqual((brief["business_name"], brief["owner"]), ("Harbor Lane Coffee Co.", "Sam Rivera"))
+        choice = json.loads(tools.ceo_choose_model({}))
+        self.assertEqual(choice["provider_requested"], "openrouter")
+        self.assertEqual(choice["recommended"]["key"], "paid_value")
+        plan = json.loads(tools.ceo_orchestrate({"goal": "Grow subscriptions"}))
+        self.assertEqual(plan["model"]["key"], "free_fallback")
+        self.assertEqual(json.loads(tools.ceo_choose_model({"budget": "free"}))["recommended"]["key"], "free_default")
+
+
+class AliasLookalikes(_Clean):
+    """Chat review: punctuation/space variants must not slip past the reserved-name check."""
+
+    def test_lookalike_variants_refused(self):
+        for name in ("C.F.O.", "c f o", "C-F-O", "Chief  of   Staff", "chief-of-staff", "H.E.R.M.E.S", "c.o.s"):
+            ok, err = o.set_seat_aliases({name: "COO"})
+            self.assertFalse(ok, name)
+            self.assertIn("reserved", err)
+
+    def test_alias_count_capped(self):
+        many = {"Name%d" % i: "COO" for i in range(17)}
+        self.assertFalse(o.set_seat_aliases(many)[0])
 
 
 if __name__ == "__main__":

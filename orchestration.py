@@ -38,6 +38,7 @@ credential reads. It validates and advises; it does not execute tools.
 import hashlib
 import json
 import re
+import secrets
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 
@@ -205,6 +206,9 @@ HEAD_SEAT = "CEO"
 _ALIAS_MAX = 40
 _ALIAS_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .'\-]*")
 _RESERVED_SEAT_WORDS = {"CEO", "CFO", "COO", "CTO", "CMO", "CLO", "CRO", "CHIEF OF STAFF", "COS", "HERMES"}
+# Compared with punctuation and spaces removed, so "C.F.O.", "C-F-O", "c f o" and "Chief  of Staff" cannot slip past.
+_RESERVED_SQUASHED = {re.sub(r"[^A-Z0-9]", "", w) for w in _RESERVED_SEAT_WORDS}
+_ALIAS_COUNT_MAX = 16
 _TEXT_MAX = {"avatar": 500, "soul": 2000}
 
 
@@ -227,6 +231,8 @@ def set_seat_aliases(mapping):
         mapping = {}
     if not isinstance(mapping, dict):
         return False, "seat aliases must be an object mapping a display name to a canonical seat."
+    if len(mapping) > _ALIAS_COUNT_MAX:
+        return False, "Too many seat aliases (limit %d)." % _ALIAS_COUNT_MAX
     cleaned = {}
     seen_targets = {}
     for alias, target in mapping.items():
@@ -235,7 +241,7 @@ def set_seat_aliases(mapping):
         bad = _display_text_problem(alias, "seat alias", _ALIAS_MAX, _ALIAS_RE)
         if bad:
             return False, bad
-        if alias.strip().upper() in _RESERVED_SEAT_WORDS:
+        if re.sub(r"[^A-Z0-9]", "", alias.upper()) in _RESERVED_SQUASHED:
             return False, ("Alias %r is a reserved seat name. An alias that shadows a canonical seat "
                            "would silently reroute that seat's work, so it is refused." % alias.strip())
         if not isinstance(target, str):
@@ -460,16 +466,25 @@ _OPTIN_STORE = {}
 _OPTIN_MAX_FIELDS = 50
 
 
+def _fingerprint(value):
+    """Short one-way fingerprint for audit records. Raw tokens and session ids are never stored there."""
+    if not isinstance(value, str) or not value:
+        return "<none>"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
 def _optin_audit(entry):
-    """Append to the audit log, bounded. Dropped entries are counted, never silent."""
+    """Append a timestamped record to the audit log, bounded. Dropped entries are counted, never silent."""
     global OPTIN_AUDIT_DROPPED
+    entry = dict(entry)
+    entry.setdefault("at", datetime.now(timezone.utc).isoformat())
     OPTIN_AUDIT_LOG.append(entry)
     while len(OPTIN_AUDIT_LOG) > _OPTIN_AUDIT_MAX:
         OPTIN_AUDIT_LOG.pop(0)
         OPTIN_AUDIT_DROPPED += 1
 
 
-def create_business_data_opt_in(fields, purpose, expires_minutes=60, session_id=None):
+def create_business_data_opt_in(fields, purpose, expires_minutes=60, session_id=None):  # session_id is required
     """Create a chat-scoped opt-in. fields: explicit list. purpose: why.
 
     Refuses credential fields (an opt-in can never cover api keys, passwords, tokens)
@@ -482,8 +497,8 @@ def create_business_data_opt_in(fields, purpose, expires_minutes=60, session_id=
         return {"valid": False, "error": "Too many fields (limit %d). Name only what the read needs." % _OPTIN_MAX_FIELDS}
     if not isinstance(purpose, str) or not purpose.strip():
         return {"valid": False, "error": "purpose is required: say what the read is for."}
-    if session_id is not None and (not isinstance(session_id, str) or not session_id.strip()):
-        return {"valid": False, "error": "session_id must be non-empty text when given."}
+    if not isinstance(session_id, str) or not session_id.strip():
+        return {"valid": False, "error": "session_id is required: an opt-in without a session identity is not granted."}
     if len(purpose.strip()) > 500 or any(len(f.strip()) > 100 for f in fields):
         return {"valid": False, "error": "purpose is limited to 500 characters and each field to 100."}
     credential_fields = [i for i, f in enumerate(fields) if _is_secret_key(f) or _value_is_secret(f)]
@@ -499,20 +514,18 @@ def create_business_data_opt_in(fields, purpose, expires_minutes=60, session_id=
     if minutes <= 0 or minutes > 60 * 24:
         return {"valid": False, "error": "expires_minutes must be between 1 and 1440."}
     now = datetime.now(timezone.utc)
-    token = "optin-" + hashlib.sha1(("%s|%s|%s" % (sorted(fields), purpose.strip(), now.isoformat())).encode()).hexdigest()[:12]
+    token = "optin-" + secrets.token_urlsafe(24)   # unguessable: a capability, not a label
     record = {"token": token, "fields": sorted({f.strip() for f in fields}),
               "purpose": purpose.strip(), "created_at": now.isoformat(),
               "expires_at": (now + timedelta(minutes=minutes)).isoformat(),
               "revoked": False}
-    if session_id is not None:
-        record["session_id"] = session_id.strip()
+    record["session_id"] = session_id.strip()
     _OPTIN_STORE[token] = record
-    _optin_audit({"event": "opt_in_created", "token": token,
+    _optin_audit({"event": "opt_in_created", "token_fp": _fingerprint(token), "session_fp": _fingerprint(session_id),
                   "fields": record["fields"], "purpose": record["purpose"],
                   "expires_at": record["expires_at"]})
     return {"valid": True, "status": "success", "opt_in": record,
-            "note": "Ephemeral. A fresh opt-in is required for any future read."
-                    + (" Bound to one session." if session_id is not None else " Not bound to a session: pass session_id to make it chat-scoped.")}
+            "note": "Ephemeral and bound to one session. A fresh opt-in is required for any future read."}
 
 
 def check_business_data_opt_in(token, field, session_id=None):
@@ -527,9 +540,10 @@ def check_business_data_opt_in(token, field, session_id=None):
             live = datetime.now(timezone.utc) < datetime.fromisoformat(rec["expires_at"])
         except ValueError:
             live = False
-        same_session = rec.get("session_id") == (session_id.strip() if isinstance(session_id, str) else None)
+        same_session = isinstance(session_id, str) and bool(session_id.strip()) and rec.get("session_id") == session_id.strip()
         allowed = bool(live and same_session and field in rec.get("fields", []))
-    _optin_audit({"event": "opt_in_check", "token": token if rec else "<unknown>",
+    _optin_audit({"event": "opt_in_check", "token_fp": _fingerprint(token) if rec else "<unknown>",
+                  "session_fp": _fingerprint(session_id),
                   "field": field if isinstance(field, str) else "<non-text>", "allowed": allowed})
     return allowed
 
@@ -539,13 +553,13 @@ def revoke_business_data_opt_in(token):
     if not rec:
         return {"valid": False, "error": "Unknown opt-in token."}
     rec["revoked"] = True
-    _optin_audit({"event": "opt_in_revoked", "token": token})
+    _optin_audit({"event": "opt_in_revoked", "token_fp": _fingerprint(token)})
     return {"valid": True, "status": "success", "token": token, "note": "Revoked. The seat returns to no-read immediately."}
 
 
 def audit_business_data_read(token, field, allowed):
-    _optin_audit({"event": "business_data_read", "token": token, "field": field,
-                  "allowed": bool(allowed), "at": datetime.now(timezone.utc).isoformat()})
+    _optin_audit({"event": "business_data_read", "token_fp": _fingerprint(token), "field": field,
+                  "allowed": bool(allowed)})
     return {"token": token, "field": field, "allowed": bool(allowed)}
 
 
@@ -977,3 +991,94 @@ def verify_result(tool_name, result, expect=None, retries_used=0):
         "expect_source": expect_source,
         "next": nxt,
     }
+
+
+# ---------------------------------------------------------------------------
+# Install config. Every key declared in plugin.yaml is applied here or reported
+# as ignored: no declared setting is silently dead.
+# ---------------------------------------------------------------------------
+INSTALL = {"business_name": "", "owner_name": "", "model_choice": "free_default",
+           "model_provider": "auto", "cost_mode": "free"}
+CONFIG_KEYS = ("business_name", "owner_name", "approval_required", "model_choice", "model_provider",
+               "cost_mode", "head_seat", "head_profile") + tuple(
+    "alias_" + s.lower().replace(" ", "_") for s in SEATS)
+_COST_MODES = ("free", "paid_value", "paid_flagship")
+_PROVIDER_RE = re.compile(r"[a-z0-9][a-z0-9._\-]{0,39}")
+
+
+def reset_install_config():
+    INSTALL.update({"business_name": "", "owner_name": "", "model_choice": "free_default",
+                    "model_provider": "auto", "cost_mode": "free"})
+
+
+def apply_install_config(cfg):
+    """Validate and apply install settings. Returns (applied, notes): both lists of readable strings.
+
+    Invalid values are refused with a reason and the previous value stays. Type 1 stops are
+    never configurable: approval_required=false is reported, not obeyed.
+    """
+    applied, notes = [], []
+    if not isinstance(cfg, dict):
+        return applied, ["install config was not an object; nothing applied."]
+    for key in ("business_name", "owner_name"):
+        val = cfg.get(key)
+        if isinstance(val, str) and val.strip():
+            bad = _display_text_problem(val, key, 100)
+            if bad:
+                notes.append(bad)
+            else:
+                INSTALL[key] = val.strip()
+                applied.append(key)
+    val = cfg.get("cost_mode")
+    if isinstance(val, str) and val.strip():
+        if val.strip().lower() in _COST_MODES:
+            INSTALL["cost_mode"] = val.strip().lower()
+            applied.append("cost_mode")
+        else:
+            notes.append("cost_mode %r refused. Valid: %s." % (val, ", ".join(_COST_MODES)))
+    val = cfg.get("model_provider")
+    if isinstance(val, str) and val.strip():
+        if _PROVIDER_RE.fullmatch(val.strip().lower()):
+            INSTALL["model_provider"] = val.strip().lower()
+            applied.append("model_provider")
+        else:
+            notes.append("model_provider %r refused: lowercase letters, numbers, dot, dash only." % val)
+    val = cfg.get("model_choice")
+    if isinstance(val, str) and val.strip():
+        try:
+            try:
+                from .models import MODELS
+            except ImportError:
+                from models import MODELS
+            keys = [m["key"] for m in MODELS]
+        except Exception:
+            keys = []
+        if val.strip() in keys:
+            INSTALL["model_choice"] = val.strip()
+            applied.append("model_choice")
+        else:
+            notes.append("model_choice %r refused. Valid keys: %s." % (val, ", ".join(keys)))
+    if cfg.get("approval_required") is False:
+        notes.append("approval_required=false was NOT applied: Type 1 actions always stop for the owner.")
+    aliases = {}
+    for seat in SEATS:
+        val = cfg.get("alias_" + seat.lower().replace(" ", "_"))
+        if isinstance(val, str) and val.strip():
+            aliases[val.strip()] = seat
+    named = cfg.get("seat_names")
+    if isinstance(named, dict):
+        for alias, seat in named.items():
+            if isinstance(alias, str) and isinstance(seat, str):
+                aliases[alias.strip()] = seat
+    if aliases:
+        ok, err = set_seat_aliases(aliases)
+        (applied.append("seat aliases") if ok else notes.append("seat aliases refused: %s" % err))
+    head = cfg.get("head_seat")
+    if isinstance(head, str) and head.strip():
+        ok, err = set_head_seat(head)
+        (applied.append("head_seat") if ok else notes.append("head_seat refused: %s" % err))
+    prof = cfg.get("head_profile")
+    if isinstance(prof, str) and prof.strip():
+        ok, err = set_seat_binding(HEAD_SEAT, profile=prof.strip())
+        (applied.append("head_profile") if ok else notes.append("head_profile refused: %s" % err))
+    return applied, notes

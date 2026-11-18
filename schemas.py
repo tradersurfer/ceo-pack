@@ -264,3 +264,129 @@ CEO_ROSTER = {
     ),
     "parameters": {"type": "object", "properties": {}, "required": []},
 }
+
+# --- v0.5.0: Task persistence schemas ---
+
+CEO_TASK_CREATE = {
+    "name": "ceo_task_create",
+    "description": (
+        "Create a persistent task with full lifecycle tracking. "
+        "Returns a task_id for tracking. Status starts at 'proposed'. "
+        "Type 1 tasks require owner approval before execution."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "run_id": {"type": "string", "description": "Orchestration run ID from ceo_orchestrate or ceo_run_create."},
+            "seat": {"type": "string", "description": "Canonical seat: CEO, CFO, COO, CTO, CMO, CLO, Chief of Staff, CRO."},
+            "title": {"type": "string", "description": "Human-readable task title."},
+            "description": {"type": "string", "description": "Detailed description of the task."},
+            "due_date": {"type": "string", "description": "Due date ISO format YYYY-MM-DD."},
+            "task_key": {"type": "string", "description": "Optional idempotency key from caller."},
+            "owner": {"type": "string", "description": "Profile name or Hermes profile id bound to the seat."},
+            "model_route": {"type": "string", "description": "Model map option name or profile_routes profile name."},
+            "approval_required": {"type": "boolean", "description": "Type 1 gate — requires owner approval before execution."},
+            "risk_flags": {"type": "array", "items": {"type": "string"}, "description": "Risk flags: external, priced, irreversible, legal_or_financial, security, people, regulatory, reputation, outside_authority."},
+            "parent_task_id": {"type": "string", "description": "Optional parent task ID for subtasks."},
+            "metadata": {"type": "object", "description": "Extensible metadata."},
+        },
+        "required": ["run_id", "seat", "title"],
+    },
+}
+
+CEO_TASK_STATUS = {
+    "name": "ceo_task_status",
+    "description": (
+        "Get task status, history, and result. Returns the full task record "
+        "including status transitions, retries, and execution history."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "Task UUID from ceo_task_create."},
+        },
+        "required": ["task_id"],
+    },
+}
+
+CEO_TASK_LIST = {
+    "name": "ceo_task_list",
+    "description": (
+        "List tasks by seat, status, run, or filter. Returns array of task summaries."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "run_id": {"type": "string", "description": "Filter by orchestration run ID."},
+            "seat": {"type": "string", "description": "Filter by seat (CEO, CFO, COO, CTO, CMO, CLO, Chief of Staff, CRO)."},
+            "status": {"type": "string", "description": "Filter by status: proposed, approved, assigned, running, blocked, completed, verified, failed."},
+            "limit": {"type": "integer", "description": "Max tasks to return (default 50)."},
+        },
+        "required": [],
+    },
+}
+
+CEO_TASK_APPROVE = {
+    "name": "ceo_task_approve",
+    "description": (
+        "Approve a Type 1 task (owner only). Moves task from 'proposed' to 'approved'. "
+        "Records who approved and when."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "Task UUID."},
+            "approved_by": {"type": "string", "description": "Name of the approver (owner)."},
+        },
+        "required": ["task_id", "approved_by"],
+    },
+}
+
+CEO_TASK_ASSIGN = {
+    "name": "ceo_task_assign",
+    "description": (
+        "Assign a task to an owner/profile and optionally a model route. "
+        "Moves task from 'approved' to 'assigned'."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "Task UUID."},
+            "owner": {"type": "string", "description": "Profile name or Hermes profile id."},
+            "model_route": {"type": "string", "description": "Optional model route or profile name for delegation."},
+        },
+        "required": ["task_id", "owner"],
+    },
+}
+
+CEO_RUN_CREATE = {
+    "name": "ceo_run_create",
+    "description": (
+        "Create an orchestration run for a goal. Returns run_id. "
+        "This is the parent container for all tasks in an orchestration flow."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "goal": {"type": "string", "description": "The orchestration goal."},
+            "head_seat": {"type": "string", "description": "Seat that owns the run (default CEO)."},
+            "model_key": {"type": "string", "description": "Model choice key: free_default, free_fallback, free_worker, paid_value, paid_flagship."},
+        },
+        "required": ["goal"],
+    },
+}
+
+CEO_RUN_STATUS = {
+    "name": "ceo_run_status",
+    "description": (
+        "Get orchestration run status, progress, and all associated tasks. "
+        "Shows run status, task counts by status, and task summaries."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "run_id": {"type": "string", "description": "Run UUID from ceo_run_create or ceo_orchestrate."},
+        },
+        "required": ["run_id"],
+    },
+}

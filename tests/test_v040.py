@@ -399,16 +399,24 @@ class SlashCommandsRegistered(unittest.TestCase):
             def register_skill(self, *a, **kw):
                 pass
 
-            def register_command(self, name, fn, description=""):
+            def register_delegation_provider(self, *a, **kw):
+                pass
+
+            def register_cli_command(self, *a, **kw):
+                pass
+
+            def register_command(self, name, fn, description="", args_hint=None):
                 seen.append(name)
 
         pkg.register(Ctx())
         for name in ["ceo", "q4", "orchestrate", "brief", "assign", "verify", "log",
-                     "decision", "route", "models", "weekly-pulse", "closeout",
-                     "q1", "q2", "q3", "monthly-closeout", "daily-checks", "eod-checks",
-                     "performance-checks", "status-check", "roster"]:
+                             "decision", "route", "models", "weekly-pulse", "closeout",
+                             "q1", "q2", "q3", "monthly-closeout", "daily-checks", "eod-checks",
+                             "performance-checks", "status-check", "roster",
+                             "task-create", "task-status", "task-list", "task-approve", "task-assign",
+                             "run-create", "run-status", "ceo delegation"]:
             self.assertIn(name, seen, name)
-        self.assertEqual(len(seen), 21)
+        self.assertEqual(len(seen), 29)
 
 
 if __name__ == "__main__":

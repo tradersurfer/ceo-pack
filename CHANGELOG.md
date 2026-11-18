@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+- Persistent task registry with full lifecycle: proposed -> approved -> assigned -> running -> blocked/completed -> verified. SQLite-backed, UUID task/run IDs, execution history, dependencies, retry/recovery.
+- Unified CEO delegation provider: each C-Suite seat (CEO, CFO, COO, CTO, CMO, CLO, Chief of Staff, CRO) gets a model route OR a Hermes profile route. Combines Advanced Delegation's model_map and profile_routes into a single backend.
+- Interactive delegation config: hermes ceo delegation config -- curses-based editor for per-seat routes (provider/model with reasoning effort, speed tier, Daybreak; or profile selection).
+- In-chat delegation switching: /ceo delegation [default|ceo_pack] [--now] -- show/switch mode, applies next session or now (rebuilds tools once).
+- Task execution reporting: delegation result includes seat, profile/model used, status, cost (when available), verification result, approval requirement.
+- 7 new task persistence tools: ceo_task_create, ceo_task_status, ceo_task_list, ceo_task_approve, ceo_task_assign, ceo_run_create, ceo_run_status.
+- 7 new slash commands: /task-create, /task-status, /task-list, /task-approve, /task-assign, /run-create, /run-status.
+- Requires Hermes >=0.22.5 for pluggable delegation providers.
+- ceo_orchestrate now creates a persistent run record and can persist tasks to the registry.
+- Type 1 approval enforcement: tasks with approval_required=True must be approved via ceo_task_approve before assignment/execution.
+
+# Changelog
+
 ## 0.4.1
 - Harden seat aliases, display text, and opt-in reading: alias lookalike guard, opt-in session/secrets/fingerprint audit, canonical seats never change.
 - Paid OpenRouter slugs now use `anthropic/` prefix (matches Nous catalog); model pins verified with tests.

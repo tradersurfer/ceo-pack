@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Mapping, Sequence
 
-from .delegation_provider import SEATS
+from .delegation_provider import SEATS, effort_problem
 
 MODES: dict[str, str] = {"default": "Default", "ceo_pack": "CEO Pack (unified)"}
 MODE_BLURBS: dict[str, str] = {
@@ -200,9 +200,9 @@ def validate_seat_config(seat_config: Mapping[str, Any], others: Mapping[str, Ma
         provider = _text(seat_config.get("provider"))
         if provider and not _provider_known(provider):
             problems.append(f"Unknown provider {provider!r} (see `hermes model` for the providers Hermes knows).")
-        effort = seat_config.get("reasoning_effort")
-        if effort not in (None, "", "low", "medium", "high"):
-            problems.append(f"Unknown reasoning effort {effort!r}; use low, medium, or high.")
+        problem = effort_problem(seat_config.get("reasoning_effort"))
+        if problem:
+            problems.append(problem)
         tier = _tier_problem(seat_config) if not problems else ""
         if tier:
             problems.append(tier)

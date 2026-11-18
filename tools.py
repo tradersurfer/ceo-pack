@@ -630,7 +630,10 @@ def ceo_task_create(args, **kwargs):
     args, bad = _prep(args)
     if bad:
         return bad
-    from . import tasks
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
     
     run_id, e = _text(args, "run_id")
     if e:
@@ -683,7 +686,7 @@ def ceo_task_create(args, **kwargs):
         "run_id": run_id,
         "seat": canonical_seat,
         "title": title,
-        "status": "proposed",
+        "task_status": "proposed",
         "approval_required": approval_required,
         "note": "Task created with status 'proposed'. Type 1 tasks require owner approval via ceo_task_approve."
     }, ignored=_ignored("ceo_task_create", args))
@@ -694,7 +697,10 @@ def ceo_task_status(args, **kwargs):
     args, bad = _prep(args)
     if bad:
         return bad
-    from . import tasks
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
     
     task_id, e = _text(args, "task_id")
     if e:
@@ -709,6 +715,11 @@ def ceo_task_status(args, **kwargs):
     dependents = tasks.get_dependent_tasks(task_id)
     
     payload = dict(task)
+    # The envelope's "status" is the call outcome ("success"); the task's
+    # lifecycle state rides under "task_status" so _status_of/verify read
+    # the envelope, not the domain value.
+    payload["task_status"] = payload.pop("status")
+    payload["task_id"] = task["id"]
     payload["history"] = history
     payload["dependencies"] = dependencies
     payload["dependents"] = dependents
@@ -722,12 +733,26 @@ def ceo_task_list(args, **kwargs):
     args, bad = _prep(args)
     if bad:
         return bad
-    from . import tasks
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
     
-    run_id = args.get("run_id")
-    seat = args.get("seat")
-    status = args.get("status")
+    # Validate filters with the same _text checks the other handlers use:
+    # non-text run_id/seat/status must be an error envelope, never a
+    # sqlite binding error.
+    run_id, e = _text(args, "run_id", required=False)
+    if e:
+        return e
+    seat, e = _text(args, "seat", required=False)
+    if e:
+        return e
+    status, e = _text(args, "status", required=False)
+    if e:
+        return e
     limit = args.get("limit", 50)
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        return _err("limit must be a non-negative integer.")
     
     if run_id:
         task_list = tasks.get_tasks_by_run(run_id)
@@ -771,7 +796,10 @@ def ceo_task_approve(args, **kwargs):
     args, bad = _prep(args)
     if bad:
         return bad
-    from . import tasks
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
     
     task_id, e = _text(args, "task_id")
     if e:
@@ -796,7 +824,7 @@ def ceo_task_approve(args, **kwargs):
     
     return _ok({
         "task_id": task_id,
-        "status": "approved",
+        "task_status": "approved",
         "approved_by": approved_by,
         "note": "Task approved. Assign owner/profile via ceo_task_assign, then it can be executed."
     }, ignored=_ignored("ceo_task_approve", args))
@@ -807,7 +835,10 @@ def ceo_task_assign(args, **kwargs):
     args, bad = _prep(args)
     if bad:
         return bad
-    from . import tasks
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
     
     task_id, e = _text(args, "task_id")
     if e:
@@ -827,16 +858,17 @@ def ceo_task_assign(args, **kwargs):
     ok = tasks.assign_task(task_id, owner, model_route)
     if not ok:
         return _err("Failed to assign task")
-    
-    # Update status to assigned if it was approved
-    if task.get("status") == "approved":
-        tasks.update_task_status(task_id, "assigned", actor=owner, note=f"Assigned to {owner}")
-    
+
+    # Assign binds an owner and activates the task: proposed/approved -> assigned.
+    # (The raw update_task_status() table refuses proposed -> assigned, so the
+    # assign operation has its own transition in tasks.move_to_assigned.)
+    tasks.move_to_assigned(task_id, actor=owner, note=f"Assigned to {owner}")
+
     return _ok({
         "task_id": task_id,
         "owner": owner,
         "model_route": model_route,
-        "status": "assigned",
+        "task_status": "assigned",
         "note": "Task assigned. Ready for execution."
     }, ignored=_ignored("ceo_task_assign", args))
 
@@ -846,7 +878,10 @@ def ceo_run_create(args, **kwargs):
     args, bad = _prep(args)
     if bad:
         return bad
-    from . import tasks
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
     
     goal, e = _text(args, "goal")
     if e:
@@ -867,7 +902,7 @@ def ceo_run_create(args, **kwargs):
         "goal": goal,
         "head_seat": canonical_seat,
         "model_key": model_key,
-        "status": "planned",
+        "run_status": "planned",
         "note": "Run created. Use ceo_orchestrate or ceo_task_create to add tasks."
     }, ignored=_ignored("ceo_run_create", args))
 
@@ -877,7 +912,10 @@ def ceo_run_status(args, **kwargs):
     args, bad = _prep(args)
     if bad:
         return bad
-    from . import tasks
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
     
     run_id, e = _text(args, "run_id")
     if e:

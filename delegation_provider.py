@@ -8,13 +8,75 @@ import json
 import logging
 from typing import Any, Mapping, Optional
 
-from agent.delegation_provider import DelegationProvider, DelegationRouteError
+try:
+    from agent.delegation_provider import DelegationProvider, DelegationRouteError
+except ImportError:
+    # Hermes host module unavailable (plain-python test runs, older Hermes):
+    # minimal stand-in with the same interface surface this provider uses.
+    # Inside Hermes the real base class is imported and nothing changes here.
+    # settings() replicates the host implementation verbatim (verified against
+    # hermes-agent's agent/delegation_provider.py).
+    class DelegationRouteError(ValueError):
+        """Raised by route_task to refuse a task (stand-in for the host class)."""
+
+    class DelegationProvider:
+        """Stand-in for agent.delegation_provider.DelegationProvider."""
+
+        def settings(self, config: Mapping[str, Any]) -> Mapping[str, Any]:
+            """This backend's settings: delegation.backends.<name>."""
+            backends = config.get("backends") if isinstance(config, Mapping) else None
+            own = backends.get(self.name) if isinstance(backends, Mapping) else None
+            return own if isinstance(own, Mapping) else {}
+
+        def is_available(self) -> bool:
+            return True
+
+        def task_parameters(self, config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+            return {}
+
+        def description(self, config: Mapping[str, Any]) -> str:
+            return ""
+
+        def route_task(self, task: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
+            raise NotImplementedError
 
 logger = logging.getLogger(__name__)
 
 BACKEND = "ceo_pack"
 SETTINGS_PATH = f"delegation.backends.{BACKEND}"
 SEATS = ["CEO", "CFO", "COO", "CTO", "CMO", "CLO", "Chief of Staff", "CRO"]
+
+#: Reasoning-effort levels the Hermes host accepts
+#: (hermes_constants.VALID_REASONING_EFFORTS). Fallback for runs where the
+#: host module is unavailable; the host parser is preferred when importable
+#: so the accepted set can never drift from the host's.
+_EFFORT_LEVELS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
+
+def effort_problem(value: Any) -> str:
+    """``""`` when a reasoning-effort value is acceptable, else a message.
+
+    Mirrors the host's ``parse_reasoning_effort``: the full
+    ``VALID_REASONING_EFFORTS`` tuple, with ``"none"``/``False`` meaning
+    disabled. The real provider's validator uses the host parser; the
+    earlier ceo-pack check hardcoded only (low, medium, high) and wrongly
+    rejected minimal / xhigh / max / ultra / none (reconciliation §2.7).
+    """
+    if value is None or value is False or value == "":
+        return ""
+    if isinstance(value, str) and value.strip().lower() in ("none", "disabled"):
+        return ""
+    try:
+        from hermes_constants import VALID_REASONING_EFFORTS, parse_reasoning_effort
+    except ImportError:
+        if isinstance(value, str) and value in _EFFORT_LEVELS:
+            return ""
+        return ("unknown reasoning effort %r; use none or one of: %s"
+                % (value, ", ".join(_EFFORT_LEVELS)))
+    if parse_reasoning_effort(value) is not None:
+        return ""
+    return ("unknown reasoning effort %r; use none or one of: %s"
+            % (value, ", ".join(VALID_REASONING_EFFORTS)))
 
 
 _WARNED: set[str] = set()
@@ -47,8 +109,9 @@ def _validate_seat_config(entry: Mapping[str, Any], seat: str) -> str:
         if not _text(entry.get("model")):
             return f"seat {seat!r} model_route needs model"
         # Validate optional fields
-        if entry.get("reasoning_effort") not in (None, "", "low", "medium", "high"):
-            return f"seat {seat!r} reasoning_effort must be low|medium|high"
+        problem = effort_problem(entry.get("reasoning_effort"))
+        if problem:
+            return f"seat {seat!r} {problem}"
         if entry.get("service_tier") not in (None, "", "normal", "fast", "ultrafast"):
             return f"seat {seat!r} service_tier must be normal|fast|ultrafast"
         if entry.get("daybreak") not in (None, True, False):

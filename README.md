@@ -1,6 +1,6 @@
 # CEO Pack
 
-![CEO Pack — v0.4.0 cover](assets/ceo-pack-cover-v040.webp)
+![CEO Pack cover](assets/ceo-pack-cover-v040.webp)
 
 A CEO orchestration layer for Hermes — not a chat wrapper. Install it, name your CEO, tell it about your business on first run, and it briefs, routes, assigns, calls tools one at a time, verifies, and logs decisions — with Hermes as COO.
 
@@ -20,12 +20,14 @@ A CEO orchestration layer for Hermes — not a chat wrapper. Install it, name yo
 - `ceo_daily_check` — daily or end-of-day check: shipped, earned, stuck, decisions.
 - `ceo_performance_check` — employee performance review template (people = Type 1, owner approval).
 - `ceo_status_check` — status of a briefing, assignment, task, log, or plan, from the item supplied. Never invents a status.
-- `ceo_roster` — C-Suite roster view: seat, display name, bound profile, capabilities, gaps. The data for the install flow and the pinned CEO Dashboard.
+- `ceo_roster` — C-Suite roster view: seat, display name, bound profile, capabilities, gaps. The data for the install flow and the CEO Pack dashboard tab.
 - `ceo_choose_model` — pick a model by job and budget, with fallbacks and limits.
+- `ceo_task_create` / `ceo_task_status` / `ceo_task_list` / `ceo_task_approve` / `ceo_task_assign` — persistent tasks in the SQLite registry: create with a UUID id, check status and history, list by run/seat/status, approve a Type 1 task, assign to a seat. Lifecycle is enforced (proposed → approved → assigned → running → blocked/completed → verified); illegal transitions are refused, and `task_key` is idempotent per run.
+- `ceo_run_create` / `ceo_run_status` — persistent runs: create a run record for a goal, check its task counts and statuses.
 
 Tool-call rules: one tool at a time, check the JSON result before the next step, retry once with corrected arguments then escalate, never retry a write/send/payment blindly. Type 1 decisions (irreversible, priced, external, legal/financial, security, people, regulatory, reputation, outside authority) stop for the owner; Type 2 (reversible, low-cost, bounded) proceeds — step 4 is no longer blanket-gated. See `docs/ORCHESTRATION.md` and `CHANGELOG.md`.
 
-Slash commands: `/ceo`, `/q4`, and `/orchestrate`, plus v0.4.0 shortcuts `/brief`, `/assign`, `/verify`, `/log`, `/decision`, `/route`, `/models`, `/weekly-pulse`, `/closeout`, `/q1`, `/q2`, `/q3`, `/monthly-closeout`, `/daily-checks`, `/eod-checks`, `/performance-checks`, `/status-check`, `/roster` (21 total).
+Slash commands: `/ceo`, `/q4`, and `/orchestrate`, plus v0.4.0 shortcuts `/brief`, `/assign`, `/verify`, `/log`, `/decision`, `/route`, `/models`, `/weekly-pulse`, `/closeout`, `/q1`, `/q2`, `/q3`, `/monthly-closeout`, `/daily-checks`, `/eod-checks`, `/performance-checks`, `/status-check`, `/roster`, plus v0.5.0 `/task-create`, `/task-status`, `/task-list`, `/task-approve`, `/task-assign`, `/run-create`, `/run-status`, and `/ceo delegation` (29 total).
 
 ## v0.4.0 — promote your agents to the C-Suite
 
@@ -34,6 +36,14 @@ Slash commands: `/ceo`, `/q4`, and `/orchestrate`, plus v0.4.0 shortcuts `/brief
 - **Capability check:** each seat has a checklist in `orchestration.py`. `check_capabilities` lists what a bound profile is missing; `propose_capability_install` returns an owner-gated install plan. Declining leaves a name-only binding, flagged in plan and log.
 - **Opt-in business-data reading:** `create_business_data_opt_in` makes an ephemeral, chat-scoped opt-in naming exact fields, a purpose, and an expiry. Every read is audited, revoke is instant, and a fresh opt-in is required for any future read. Fictional-data test only.
 - **Hardened router and verifier:** see CHANGELOG.md. The Hermes live-test P0s are fixed — whole-word matching with per-seat priority, matched terms, also-consult, and confidence. The router is expanded from the top-20 business tasks AI agent users actually ask for (writing, coding, deals, support, forecasting, fundraising, and more): 37 domains, roughly 3x the terms, with multi-term scoring so a deal mention beats a bare contract mention. 104 tests total, 20/20 back-to-back, Nous validator 15/15, no warnings.
+
+## v0.5.0 — the CEO Executive Workspace
+
+- **Dashboard tab:** click the CEO Pack tab (`/ceo-pack`, after Kanban) and see the org chart, live agent activity, task board, and approval center. Every number traces to a registry or roster read — empty states say "No tasks yet", never invented activity. The org chart is a generic tree, so departments and subordinate agents plug in later. The task board is read-only; nothing in the UI bypasses the tools.
+- **Persistent task registry:** SQLite-backed, UUID task/run IDs, enforced lifecycle, dependencies, execution history, retry/recovery. `ceo_orchestrate` creates a persistent run record.
+- **Unified delegation:** each seat runs on a model route or a Hermes profile route, configured with `hermes ceo delegation config` or `/ceo delegation`. Reconciled against the real Advanced Delegation source — see `docs/DELEGATION_RECONCILIATION.md`. Execution metadata (route, tokens, cost, duration, exit reason) is recorded on the task and shown in the dashboard; cost is never estimated, unknown stays unknown.
+- **Approval, honestly:** Type 1 tasks are flagged `approval_required` on the assignment and shown pending in the dashboard approval center; the owner approves in chat. The assignment itself does not block an unapproved Type 1 task — a blocking gate is design-only until the owner says build it.
+- 286 tests total, 20/20 back-to-back, demo rc=0, Nous validator 15/15. Requires Hermes >=0.22.5.
 
 ## Model choice — your Hermes model runs, the plugin recommends
 
@@ -71,6 +81,7 @@ hermes plugins validate ~/.hermes/plugins/ceo-pack --install-deps
 2. Ask for a Q4 closeout brief.
 3. Route and assign: CFO for books/tax prep, CLO for entity/filings, COO/Hermes for coordination.
 4. Record the decision, show the approval gate stopping an external step until the owner approves.
+5. Open the CEO Pack tab to see the org chart, task board, and approvals.
 
 ## Privacy — what is NOT in this plugin
 

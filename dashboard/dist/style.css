@@ -1,0 +1,331 @@
+/*
+ * CEO Pack — Executive Workspace dashboard styles.
+ *
+ * All colors reference the host theme CSS vars (with fallbacks) so the tab
+ * reskins with the active dashboard theme. No hardcoded palette.
+ */
+
+.ceo-pack {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px 20px 40px;
+  color: var(--color-foreground, #e5e5e5);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.ceo-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.ceo-header h1 {
+  font-size: 22px;
+  margin: 0 0 4px;
+}
+
+.ceo-subtitle {
+  color: var(--color-muted-foreground, #9a9a9a);
+  margin: 0;
+  max-width: 640px;
+}
+
+.ceo-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ceo-updated {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ceo-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 12px 0 16px;
+}
+
+.ceo-stat {
+  min-width: 110px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: var(--radius, 8px);
+  background: var(--color-card, transparent);
+  display: flex;
+  flex-direction: column;
+}
+
+.ceo-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.ceo-stat-label {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 12px;
+}
+
+.ceo-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+  flex-wrap: wrap;
+}
+
+.ceo-tab {
+  opacity: 0.75;
+}
+
+.ceo-tab-active {
+  opacity: 1;
+  font-weight: 700;
+  border-color: var(--color-ring, #666) !important;
+}
+
+.ceo-panel h3 {
+  margin: 20px 0 8px;
+  font-size: 15px;
+}
+
+.ceo-note {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 13px;
+  max-width: 760px;
+}
+
+.ceo-loading {
+  color: var(--color-muted-foreground, #9a9a9a);
+  padding: 24px 0;
+}
+
+.ceo-empty {
+  padding: 16px;
+  border: 1px dashed var(--color-border, #333);
+  border-radius: var(--radius, 8px);
+  color: var(--color-muted-foreground, #9a9a9a);
+  margin: 8px 0;
+}
+
+.ceo-error {
+  padding: 12px 14px;
+  border: 1px solid var(--hermes-diag-error, #c0392b);
+  border-radius: var(--radius, 8px);
+  background: color-mix(in srgb, var(--hermes-diag-error, #c0392b) 12%, transparent);
+  margin: 8px 0;
+}
+
+.ceo-retry {
+  margin-left: 12px;
+}
+
+/* --- Org chart --- */
+.ceo-org-node-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.ceo-org-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 150px;
+  max-width: 200px;
+  padding: 12px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: var(--radius, 8px);
+  background: var(--color-card, transparent);
+  color: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+
+.ceo-org-node:hover,
+.ceo-org-node-selected {
+  border-color: var(--color-ring, #666);
+}
+
+.ceo-org-children {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border, #333);
+}
+
+.ceo-org-name {
+  font-weight: 700;
+}
+
+.ceo-org-seat {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 12px;
+}
+
+.ceo-org-binding {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 12px;
+}
+
+.ceo-avatar-img {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.ceo-avatar-initials {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  background: var(--color-border, #333);
+}
+
+.ceo-missing {
+  margin-top: 4px;
+}
+
+.ceo-seat-tasks {
+  margin-top: 20px;
+}
+
+/* --- Task board --- */
+.ceo-filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.ceo-select,
+.ceo-search {
+  background: var(--color-card, transparent);
+  color: var(--color-foreground, inherit);
+  border: 1px solid var(--color-border, #333);
+  border-radius: var(--radius, 8px);
+  padding: 6px 8px;
+  font-size: 14px;
+}
+
+.ceo-status-group {
+  margin-bottom: 8px;
+}
+
+.ceo-task-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  margin: 6px 0;
+  border: 1px solid var(--color-border, #333);
+  border-radius: var(--radius, 8px);
+  background: var(--color-card, transparent);
+  color: inherit;
+  cursor: pointer;
+}
+
+.ceo-task-card:hover,
+.ceo-task-card-selected {
+  border-color: var(--color-ring, #666);
+}
+
+.ceo-task-title {
+  font-weight: 600;
+}
+
+.ceo-task-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.ceo-task-sub {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 12px;
+}
+
+.ceo-status {
+  text-transform: capitalize;
+}
+
+.ceo-status-running {
+  font-weight: 700;
+}
+
+.ceo-status-blocked,
+.ceo-status-failed {
+  border-color: var(--hermes-diag-error, #c0392b) !important;
+}
+
+.ceo-overdue,
+.ceo-type1 {
+  border-color: var(--hermes-diag-warning, #d4a017) !important;
+}
+
+/* --- Task detail --- */
+.ceo-detail {
+  margin: 12px 0;
+}
+
+.ceo-close {
+  margin-left: auto;
+}
+
+.ceo-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 16px;
+  margin-bottom: 12px;
+}
+
+.ceo-detail-deps {
+  margin-bottom: 12px;
+}
+
+.ceo-detail h4 {
+  margin: 12px 0 6px;
+}
+
+.ceo-history {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.ceo-history li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border, #333);
+}
+
+.ceo-history-meta {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 12px;
+}
+
+.ceo-history-note {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 12px;
+}

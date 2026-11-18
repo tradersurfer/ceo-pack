@@ -152,19 +152,40 @@ def _ceo_pack_routes() -> None:
                 return
             continue
         if idx == len(SEATS):  # Add/Edit
-            _edit_seat_route({}, seats)
+            _edit_seat_route("", {}, seats)
             continue
         # Edit existing seat
         seat = SEATS[idx]
-        _edit_seat_route(seats.get(seat, {}), {k: v for k, v in seats.items() if k != seat})
+        _edit_seat_route(seat, seats.get(seat, {}), {k: v for k, v in seats.items() if k != seat})
 
 
-def _edit_seat_route(existing: Mapping[str, Any], others: Mapping[str, Mapping[str, Any]]) -> None:
-    """Interactive editor for a single seat's route."""
+def _preserved_extra_keys(existing: Mapping[str, Any]) -> dict:
+    """Keys the editor keeps from a previous seat config.
+
+    Only ``fallback_providers`` — a legitimate route key the editor never
+    prompts for. Every other key the editor does not prompt for is
+    dropped, never carried forward: an ``api_key`` (or any other unknown
+    key) sitting in a hand-edited config must not survive an edit
+    (reconciliation §3.5).
+    """
+    extra: dict = {}
+    if isinstance(existing.get("fallback_providers"), list):
+        extra["fallback_providers"] = list(existing["fallback_providers"])
+    return extra
+
+
+def _edit_seat_route(seat: str, existing: Mapping[str, Any], others: Mapping[str, Mapping[str, Any]]) -> None:
+    """Interactive editor for a single seat's route.
+
+    ``seat`` is the seat being edited, or "" to pick a new seat. The seat
+    is passed explicitly — never recovered by object identity from the
+    config mapping (the old lookup compared by identity and fell back to
+    "first seat not in others", which only worked by accident).
+    """
     from .delegation_provider import SEATS
-    
+
     # Pick seat if new
-    if not existing:
+    if not seat:
         seat_names = [s for s in SEATS if s not in others]
         if not seat_names:
             print("All seats already configured.")
@@ -174,14 +195,6 @@ def _edit_seat_route(existing: Mapping[str, Any], others: Mapping[str, Mapping[s
         if idx < 0 or idx == len(seat_names):
             return
         seat = seat_names[idx]
-    else:
-        # Find seat name from existing config
-        seat = next((s for s, cfg in {**others, **{"": existing}}.items() if cfg is existing), "")
-        if not seat:
-            for s in SEATS:
-                if s not in others:
-                    seat = s
-                    break
     
     # Pick route type
     type_rows = [
@@ -214,12 +227,9 @@ def _edit_seat_route(existing: Mapping[str, Any], others: Mapping[str, Mapping[s
             print("Route not saved.")
             return
         route = {"seat": seat, "type": "model_route", "description": description, **where}
-        # Keys that survive an edit of the same endpoint
-        same_endpoint = (where.get("provider", "") == _text(existing.get("provider")) and
-                         where.get("base_url", "") == _text(existing.get("base_url")))
-        for key, value in existing.items():
-            if key not in route and key not in store.ROUTE_KEYS and (same_endpoint or key == "fallback_providers"):
-                route[key] = value
+        # Only fallback_providers survives an edit (the editor never
+        # prompts for it); unknown keys are dropped, never carried forward.
+        route.update(_preserved_extra_keys(existing))
         _pick_effort(route, _text(existing.get("reasoning_effort")))
         _pick_tier(route, _text(existing.get("service_tier")))
         _pick_daybreak(route, existing.get("daybreak") is True)
@@ -291,13 +301,39 @@ def _pick_model(provider: str, models: list[str], current: str) -> str:
 
 
 def _pick_effort(route: dict[str, Any], current: str) -> None:
-    from hermes_cli.main_provider_setup import _prompt_reasoning_effort_selection
+    """Reasoning-effort picker built on this CLI's own radio menu.
+
+    Replaces the host's private ``_prompt_reasoning_effort_selection``
+    (catalog rule 9: underscore-private, can change or vanish on any
+    release). Semantics preserved, verified against the host source
+    (``hermes_cli.main_provider_setup``): cancel / Skip keeps the current
+    value, "Inherit parent" leaves the key unset, "Disable reasoning"
+    stores ``"none"``, a level stores that level. The level list comes
+    from the public ``hermes_constants.VALID_REASONING_EFFORTS``.
+    """
     from hermes_constants import VALID_REASONING_EFFORTS
-    effort = _prompt_reasoning_effort_selection(list(VALID_REASONING_EFFORTS), current_effort=current,
-                                                default_label="Inherit parent")
-    effort = current if effort is None else effort
-    if effort:
-        route["reasoning_effort"] = effort
+    levels = list(VALID_REASONING_EFFORTS)
+    options = ["Inherit parent", *levels, "Disable reasoning"]
+    if current == "none":
+        selected = len(options) - 1
+    elif current in levels:
+        selected = 1 + levels.index(current)
+    elif current == "":
+        selected = 0
+    else:
+        selected = 1 + levels.index("medium") if "medium" in levels else 0
+    idx = _radio("Reasoning effort for this route:", options, selected=selected,
+                 description="  Inherit parent uses the parent agent's effort. Pick a level to pin this seat.\n")
+    if idx < 0:
+        if current:
+            route["reasoning_effort"] = current
+        return
+    if idx == 0:
+        return
+    if idx == len(options) - 1:
+        route["reasoning_effort"] = "none"
+        return
+    route["reasoning_effort"] = levels[idx - 1]
 
 
 def _pick_tier(route: dict[str, Any], current: str) -> None:

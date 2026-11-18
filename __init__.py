@@ -132,6 +132,19 @@ def _apply_install_config(ctx):
 def register(ctx):
     _apply_install_config(ctx)
 
+    # --- Persist the applied roster for the dashboard tab ---
+    # The dashboard API runs in the web-server process, which never shares
+    # this process's in-memory roster (aliases, display names, bindings).
+    # Best-effort snapshot next to the task DB; a failure must never break
+    # registration. Resolves through the same path as the task DB, so the
+    # CEO_PACK_TASK_DB override moves both together.
+    try:
+        from . import orchestration as _orch_snapshot
+        from .tasks import roster_snapshot_path
+        _orch_snapshot.write_roster_snapshot(roster_snapshot_path())
+    except Exception:
+        logger.debug("CEO Pack: roster snapshot not written", exc_info=True)
+
     # --- Initialize task database ---
     try:
         from .tasks import init_db
@@ -293,7 +306,9 @@ def register(ctx):
         ctx.register_delegation_provider(CEODelegationProvider())
         logger.info("CEO Pack delegation provider registered")
     except ModuleNotFoundError as exc:
-        if exc.name != "agent.delegation_provider":
+        # exc.name is "agent" (not "agent.delegation_provider") when the
+        # top-level host package is missing; only re-raise for other modules.
+        if (exc.name or "").split(".")[0] != "agent":
             raise
         logger.warning(
             "CEO Pack needs a Hermes core with pluggable delegation providers "

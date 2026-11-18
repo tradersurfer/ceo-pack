@@ -203,7 +203,20 @@ def create_task(
     metadata: Optional[dict] = None,
     db_path: Optional[str] = None
 ) -> str:
-    """Create a new task. Returns task_id (UUID)."""
+    """Create a new task. Returns task_id (UUID).
+
+    Idempotent on task_key within a run: creating twice with the same
+    (run_id, task_key) returns the existing task id instead of a
+    duplicate row.
+    """
+    if task_key is not None:
+        with _connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT id FROM tasks WHERE run_id = ? AND task_key = ?",
+                (run_id, task_key)
+            ).fetchone()
+            if row:
+                return row["id"]
     task_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     with _connect(db_path) as conn:
@@ -307,6 +320,26 @@ def get_tasks_by_seat(seat: str, status: Optional[str] = None, db_path: Optional
     return tasks
 
 
+# Legal lifecycle transitions (plugin.yaml). update_task_status enforces
+# this table: stage skips, backwards moves, and any move out of a
+# terminal state are refused (return False, no change, no history).
+# proposed -> approved is the owner-approval step; approve_task() is the
+# usual path, but the raw transition is legal too (concurrent-update
+# tests drive proposed -> approved through here).
+_LEGAL_TRANSITIONS = {
+    ("proposed", "approved"),
+    ("approved", "assigned"),
+    ("assigned", "running"),
+    ("running", "blocked"),
+    ("running", "completed"),
+    ("running", "failed"),
+    ("blocked", "running"),
+    ("blocked", "failed"),
+    ("completed", "verified"),
+    ("failed", "running"),
+}
+
+
 def update_task_status(
     task_id: str,
     new_status: str,
@@ -316,7 +349,11 @@ def update_task_status(
     error: Optional[dict] = None,
     db_path: Optional[str] = None
 ) -> bool:
-    """Transition task to a new status. Returns True if changed."""
+    """Transition task to a new status. Returns True if changed.
+
+    Illegal transitions (not in _LEGAL_TRANSITIONS) return False and
+    leave the row untouched; unknown statuses raise ValueError.
+    """
     valid_statuses = {"proposed", "approved", "assigned", "running", "blocked", "completed", "verified", "failed"}
     if new_status not in valid_statuses:
         raise ValueError(f"Invalid status: {new_status}. Valid: {valid_statuses}")
@@ -329,6 +366,8 @@ def update_task_status(
             return False
         old_status = row["status"]
         if old_status == new_status:
+            return False
+        if (old_status, new_status) not in _LEGAL_TRANSITIONS:
             return False
 
         # Build update
@@ -367,6 +406,31 @@ def assign_task(task_id: str, owner: str, model_route: Optional[str] = None, db_
         if changed:
             _log_history(conn, task_id, None, "assigned", "system", f"Assigned to {owner}")
     return changed
+
+
+def move_to_assigned(task_id: str, actor: str = "system", note: str = "", db_path: Optional[str] = None) -> bool:
+    """Assign-operation transition: proposed/approved -> assigned.
+
+    ceo_task_assign binds an owner AND activates the task in one step, so
+    it legitimately moves a merely-proposed task to assigned. The raw
+    update_task_status() table still refuses proposed -> assigned (a stage
+    skip); this is the assign operation's own path, not the raw one.
+    Returns True if the task moved to assigned.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row or row["status"] not in ("proposed", "approved"):
+            return False
+        old_status = row["status"]
+        conn.execute(
+            "UPDATE tasks SET status = 'assigned', updated_at = ? WHERE id = ?",
+            (now, task_id)
+        )
+        changed = conn.total_changes > 0
+        if changed:
+            _log_history(conn, task_id, old_status, "assigned", actor, note)
+        return changed
 
 
 def approve_task(task_id: str, approved_by: str, db_path: Optional[str] = None) -> bool:
@@ -445,7 +509,238 @@ def get_task_history(task_id: str, db_path: Optional[str] = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ---------- Delegated execution records (v0.5.0 Phase 3) ----------
+# The Hermes host reports per-task execution metadata on a delegate_task
+# result entry (tools/delegate_tool_child_run.py): route, tokens, cost_usd,
+# cost_status, api_calls, duration_seconds, exit_reason, failure_reason.
+# This is the ONLY shape recorded here. Cost is never estimated: when the
+# host cannot compute it, cost_status is "unknown" and no cost is shown.
+
+def _clean_execution(entry: Any) -> Optional[dict]:
+    """Validate a host result entry into the storable execution record.
+
+    Allowlisted fields only; everything else is dropped (summary/error
+    prose, _child_* internals, tool_trace, anything key-shaped). Returns
+    None when the entry is not a mapping.
+    """
+    if not isinstance(entry, dict):
+        return None
+    out: dict = {}
+    route = entry.get("route")
+    if isinstance(route, dict):
+        clean_route = {}
+        for key in ("backend", "label", "provider", "model",
+                    "reasoning_effort", "service_tier"):
+            value = route.get(key)
+            if isinstance(value, str) and value.strip():
+                clean_route[key] = value.strip()
+        for key in ("fallback_activated", "refused"):
+            if route.get(key) is True:
+                clean_route[key] = True
+        if clean_route:
+            out["route"] = clean_route
+    tokens = entry.get("tokens")
+    if isinstance(tokens, dict):
+        clean_tokens = {}
+        for key in ("input", "output"):
+            value = tokens.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                clean_tokens[key] = value
+        if clean_tokens:
+            out["tokens"] = clean_tokens
+    cost = entry.get("cost_usd")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+        out["cost_usd"] = round(float(cost), 6)
+    cost_status = entry.get("cost_status")
+    out["cost_status"] = (cost_status.strip() if isinstance(cost_status, str)
+                          and cost_status.strip() else "unknown")
+    api_calls = entry.get("api_calls")
+    if isinstance(api_calls, int) and not isinstance(api_calls, bool) and api_calls >= 0:
+        out["api_calls"] = api_calls
+    duration = entry.get("duration_seconds")
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration >= 0:
+        out["duration_seconds"] = round(float(duration), 3)
+    for key in ("exit_reason", "failure_reason", "status"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
+    if entry.get("truncated") is True:
+        out["truncated"] = True
+    task_index = entry.get("task_index")
+    if isinstance(task_index, int) and not isinstance(task_index, bool) and task_index >= 0:
+        out["task_index"] = task_index
+    return out
+
+
+def execution_from_metadata(metadata: Any) -> dict:
+    """Validated execution record out of a task's parsed metadata.
+
+    Returns {} when absent. Re-validates on read: a hand-edited DB cannot
+    smuggle fields past the API. ``recorded_at`` is preserved when present.
+    """
+    if not isinstance(metadata, dict):
+        return {}
+    raw = metadata.get("execution")
+    if not isinstance(raw, dict):
+        return {}
+    clean = _clean_execution(raw)
+    if clean is None:
+        return {}
+    recorded_at = raw.get("recorded_at")
+    if isinstance(recorded_at, str) and recorded_at.strip():
+        clean["recorded_at"] = recorded_at.strip()
+    return clean
+
+
+def record_execution(task_id: str, entry: Any, db_path: Optional[str] = None) -> bool:
+    """Record a host delegate_task result entry on a task.
+
+    Stores the validated record under ``metadata["execution"]`` (no schema
+    change; existing DBs unaffected). Returns True when stored, False for a
+    missing task or an unusable entry. Never raises.
+    """
+    try:
+        clean = _clean_execution(entry)
+        if clean is None:
+            return False
+        with _connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT metadata FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not row:
+                return False
+            try:
+                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+            except json.JSONDecodeError:
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            clean["recorded_at"] = datetime.now(timezone.utc).isoformat()
+            metadata["execution"] = clean
+            conn.execute(
+                "UPDATE tasks SET metadata = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(metadata), datetime.now(timezone.utc).isoformat(), task_id))
+        return True
+    except Exception:
+        return False
+
+
+def get_execution(task_id: str, db_path: Optional[str] = None) -> dict:
+    """Validated execution record for a task, {} when none recorded."""
+    task = get_task(task_id, db_path=db_path)
+    if not task:
+        return {}
+    return execution_from_metadata(task.get("metadata"))
+
+
 # ---------- Query helpers ----------
+
+def roster_snapshot_path(db_path: Optional[str] = None) -> Path:
+    """Where the roster snapshot lives: next to the task DB.
+
+    The agent process writes it when install config is applied; the
+    dashboard process reads it back. Same resolution as the DB itself,
+    so the CEO_PACK_TASK_DB override moves both together.
+    """
+    return _resolve_db_path(db_path).parent / "ceo_pack_roster.json"
+
+
+def _parse_task_row(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    for field in ("risk_flags", "metadata"):
+        if d.get(field):
+            try:
+                d[field] = json.loads(d[field])
+            except json.JSONDecodeError:
+                d[field] = {}
+    return d
+
+
+def list_tasks(limit: int = 100, status: Optional[str] = None,
+               seat: Optional[str] = None, run_id: Optional[str] = None,
+               db_path: Optional[str] = None) -> list[dict]:
+    """All tasks, newest first. Read-only; used by the dashboard board."""
+    where, params = [], []
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if seat:
+        where.append("seat = ?")
+        params.append(seat)
+    if run_id:
+        where.append("run_id = ?")
+        params.append(run_id)
+    sql = "SELECT * FROM tasks"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(max(0, int(limit)))
+    with _connect(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_parse_task_row(r) for r in rows]
+
+
+def get_task_runs(limit: int = 20, db_path: Optional[str] = None) -> list[dict]:
+    """Orchestration runs, newest first. Read-only."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM task_runs ORDER BY created_at DESC LIMIT ?",
+            (max(0, int(limit)),)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_run_count(db_path: Optional[str] = None) -> int:
+    """Total orchestration runs. Read-only."""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM task_runs").fetchone()
+    return row["n"] if row else 0
+
+
+def get_status_counts(db_path: Optional[str] = None) -> dict:
+    """Task counts by lifecycle status. A count is a read, never an inference."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM tasks GROUP BY status"
+        ).fetchall()
+    return {r["status"]: r["n"] for r in rows}
+
+
+def get_recent_history(limit: int = 50, db_path: Optional[str] = None) -> list[dict]:
+    """Most recent task-history events across all tasks, newest first.
+
+    Each event carries the task title + seat so the activity feed can show
+    it without a second lookup. Read-only.
+    """
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT h.id, h.task_id, h.from_status, h.to_status, h.actor,
+                      h.note, h.at, t.title, t.seat
+               FROM task_history h
+               JOIN tasks t ON t.id = h.task_id
+               ORDER BY h.at DESC, h.id DESC LIMIT ?""",
+            (max(0, int(limit)),)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_approval_history(limit: int = 50, db_path: Optional[str] = None) -> list[dict]:
+    """History events where a task moved to approved — the approval record.
+
+    The approval center reads this; it is registry evidence, not a
+    separate log the dashboard could drift from.
+    """
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT h.id, h.task_id, h.from_status, h.to_status, h.actor,
+                      h.note, h.at, t.title, t.seat
+               FROM task_history h
+               JOIN tasks t ON t.id = h.task_id
+               WHERE h.to_status = 'approved'
+               ORDER BY h.at DESC, h.id DESC LIMIT ?""",
+            (max(0, int(limit)),)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
 
 def get_pending_approvals(db_path: Optional[str] = None) -> list[dict]:
     """Tasks awaiting owner approval (Type 1)."""

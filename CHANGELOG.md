@@ -1,16 +1,20 @@
 # Changelog
 
-## 0.5.0
-- Persistent task registry with full lifecycle: proposed -> approved -> assigned -> running -> blocked/completed -> verified. SQLite-backed, UUID task/run IDs, execution history, dependencies, retry/recovery.
-- Unified CEO delegation provider: each C-Suite seat (CEO, CFO, COO, CTO, CMO, CLO, Chief of Staff, CRO) gets a model route OR a Hermes profile route. Combines Advanced Delegation's model_map and profile_routes into a single backend.
-- Interactive delegation config: hermes ceo delegation config -- curses-based editor for per-seat routes (provider/model with reasoning effort, speed tier, Daybreak; or profile selection).
+## 0.5.0 — CEO Executive Workspace
+- NEW dashboard tab (`/ceo-pack`, after Kanban): org chart, live agent activity, task board, and approval center, served by `dashboard/plugin_api.py` (9 read-only GET routes). Every number traces to a registry/roster read; empty states show "No tasks yet", never fabricated activity. Org chart is a generic tree (departments / subordinate agents plug in later, not hardcoded to 8 seats). Task board is read-only — no write routes, so nothing bypasses the tools.
+- Persistent task registry with enforced lifecycle: proposed -> approved -> assigned -> running -> blocked/completed -> verified (failed -> running is the retry path). Illegal transitions are refused, `task_key` is idempotent per run, UUID task/run IDs, execution history, dependencies, retry/recovery.
+- Task tools return a proper success envelope: the domain state lives under `task_status` / `run_status` and `status` is `"success"`, so `ceo_verify` and the post-tool-call hook verify all 7 handlers clean. `ceo_task_assign` lands the DB row in "assigned" from proposed or approved (the old assign lie is fixed). `ceo_task_list` validates bad input instead of raising.
+- Unified CEO delegation provider: each C-Suite seat (CEO, CFO, COO, CTO, CMO, CLO, Chief of Staff, CRO) gets a model route OR a Hermes profile route. Combines Advanced Delegation's model_map and profile_routes into a single backend. Reconciled against the real Advanced Delegation source (`docs/DELEGATION_RECONCILIATION.md`): faithful port of the two real providers merged; reasoning-effort validation matches the host's full list (minimal, low, medium, high, xhigh, max, ultra, none); unknown profile/model fails closed.
+- Execution metadata recording: `tasks.record_execution` stores the host-reported route, tokens, cost, duration, API calls, and exit/failure reason (allowlisted fields only; cost is never estimated, unknown stays unknown). The dashboard TaskDetail shows it as "Delegated execution" (requested vs ran-on route).
+- Interactive delegation config: hermes ceo delegation config -- curses-based editor for per-seat routes (provider/model with reasoning effort, speed tier, Daybreak; or profile selection). Only `fallback_providers` survives an edit; unknown keys (e.g. a stray `api_key`) are dropped.
 - In-chat delegation switching: /ceo delegation [default|ceo_pack] [--now] -- show/switch mode, applies next session or now (rebuilds tools once).
-- Task execution reporting: delegation result includes seat, profile/model used, status, cost (when available), verification result, approval requirement.
-- 7 new task persistence tools: ceo_task_create, ceo_task_status, ceo_task_list, ceo_task_approve, ceo_task_assign, ceo_run_create, ceo_run_status.
-- 7 new slash commands: /task-create, /task-status, /task-list, /task-approve, /task-assign, /run-create, /run-status.
+- 7 new task persistence tools: ceo_task_create, ceo_task_status, ceo_task_list, ceo_task_approve, ceo_task_assign, ceo_run_create, ceo_run_status. 21 tools total, 29 slash commands (21 + 7 task commands + /ceo delegation).
 - Requires Hermes >=0.22.5 for pluggable delegation providers.
 - ceo_orchestrate now creates a persistent run record and can persist tasks to the registry.
-- Type 1 approval enforcement: tasks with approval_required=True must be approved via ceo_task_approve before assignment/execution.
+- Type 1 approval, honestly stated: tasks with `approval_required=True` are flagged on the assignment and shown pending in the dashboard approval center, and the owner approves in chat — but `ceo_task_assign` does not block an unapproved Type 1 task. A blocking gate (`pre_tool_call`, warn mode first) is design-only and needs Adrian's explicit yes before it is built.
+- Catalog art: `assets/ceo-pack-cover-v040.webp` is the install-card thumbnail; the v0.5.0 catalog entry adds `image: https://raw.githubusercontent.com/tradersurfer/ceo-pack/<SHA>/assets/ceo-pack-cover-v040.webp` (see `docs/CATALOG_PR_v050.md`). Note: the file contains JPEG bytes under a `.webp` name — consider renaming to `.jpg` before filing the catalog PR.
+- Tests: 286 total (151 v0.4.1 + 90 v0.5.0 task/delegation from task 2 + 45 dashboard and delegation additions in Phases 2–3), all passing, 20/20 back-to-back, demo rc=0, Nous validator 15/15. One pre-existing warning remains: private core imports in the delegation files (catalog rule 9) — see `docs/DELEGATION_RECONCILIATION.md` §7 for the per-import seam analysis; the one replaceable import (the host's private reasoning-effort picker) was replaced in Phase 4.
+- Cleanup: dead `tools_task_handlers.py` and build scaffolding (`__init_new.py`, `write_init_part1-7.py`, `ceo-pack-audit.patch`) removed.
 
 # Changelog
 

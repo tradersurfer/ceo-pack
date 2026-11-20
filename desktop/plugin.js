@@ -1,5 +1,6 @@
 /**
- * CEO Pack — Hermes Desktop half (v2.1: native + color/interactive polish).
+ * CEO Pack — Hermes Desktop half (v2.2: native + color/interactive polish,
+ * robust live pulse via Tailwind animate-pulse, bold filled tabs).
  *
  * Plain ESM runtime plugin, loaded uncompiled by the Desktop app. No build
  * step, no Hermes repo changes. The Desktop app's sidebar does NOT read the
@@ -104,7 +105,7 @@ const STATUS_COLORS = {
 function StatusPill({ status }) {
   const color = STATUS_COLORS[status] || 'var(--ui-text-secondary)'
   return jsx('span', {
-    style: { border: `1px solid ${color}`, color, padding: '1px 8px', fontSize: '0.8rem', whiteSpace: 'nowrap' },
+    style: { border: `1px solid ${color}`, color, padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' },
     children: statusLabel(status)
   })
 }
@@ -152,9 +153,10 @@ function TabButton({ id, label, active, onSelect }) {
     style: {
       padding: '6px 14px',
       border: '1px solid var(--ui-stroke-secondary)',
-      background: 'transparent',
-      color: active ? 'var(--ui-accent)' : 'var(--ui-text-primary)',
+      background: active ? 'var(--ui-accent)' : 'transparent',
+      color: active ? 'var(--ui-on-accent)' : 'var(--ui-text-primary)',
       borderColor: active ? 'var(--ui-accent)' : 'var(--ui-stroke-secondary)',
+      fontWeight: active ? 700 : 600,
       cursor: 'pointer'
     },
     children: label
@@ -199,7 +201,6 @@ function CeoPackPage() {
   return jsxs('div', {
     style: { padding: '20px 24px', height: '100%', overflowY: 'auto' },
     children: [
-      jsx('style', { children: '@keyframes ceoPulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }' }),
       jsx('h1', { style: { fontSize: '1.4rem', margin: '0 0 4px' }, children: 'CEO Pack — Executive Workspace' }),
       jsx('p', { style: { color: 'var(--ui-text-secondary)', margin: '0 0 16px' }, children: 'Your AI C-suite at a glance. Every number below is a live read of the task registry — nothing is invented.' }),
       jsx(SummaryStrip, { summary: data.summary.data }),
@@ -238,13 +239,15 @@ function CeoPackPage() {
 function SeatCard({ node, selected, onSelect }) {
   const live = isLive(node.last_activity)
   const gaps = (node.missing || []).length
+  const fg = selected ? 'var(--ui-on-accent)' : 'var(--ui-text-primary)'
+  const fg2 = selected ? 'var(--ui-on-accent)' : 'var(--ui-text-secondary)'
   return jsxs('button', {
     type: 'button',
     onClick: () => onSelect(node.seat),
     style: {
       border: '1px solid var(--ui-stroke-secondary)',
       background: selected ? 'var(--ui-accent)' : 'transparent',
-      color: 'var(--ui-text-primary)',
+      color: fg,
       padding: '14px',
       minWidth: '150px',
       cursor: 'pointer',
@@ -255,21 +258,22 @@ function SeatCard({ node, selected, onSelect }) {
         style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' },
         children: [
           jsx('span', {
+            className: live ? 'animate-pulse' : undefined,
             style: {
-              width: '10px', height: '10px', borderRadius: '50%',
+              width: '12px', height: '12px', borderRadius: '50%',
               background: live ? 'var(--ui-success)' : 'var(--ui-stroke-secondary)',
-              display: 'inline-block',
-              animation: live ? 'ceoPulse 1.6s ease-in-out infinite' : undefined
+              display: 'inline-block'
             },
             children: ''
           }),
-          jsx('span', { style: { fontWeight: 600 }, children: node.display_name || node.seat })
+          jsx('span', { style: { fontWeight: 700 }, children: node.display_name || node.seat }),
+          live ? jsx('span', { style: { color: selected ? fg : 'var(--ui-success)', fontWeight: 700, fontSize: '0.8rem' }, children: '● LIVE' }) : null
         ]
       }),
-      jsx('div', { style: { color: 'var(--ui-text-secondary)', fontSize: '0.85rem', marginTop: '4px' }, children: node.seat }),
-      jsx('div', { style: { color: 'var(--ui-text-secondary)', fontSize: '0.85rem' }, children: `Last active: ${relTime(node.last_activity)}` }),
-      jsx('div', { style: { color: 'var(--ui-text-secondary)', fontSize: '0.85rem' }, children: node.profile ? node.profile : 'Reference agent' }),
-      gaps > 0 ? jsx('div', { style: { marginTop: '6px', fontSize: '0.8rem' }, children: `${gaps} CAPABILITY GAP${gaps === 1 ? '' : 'S'}` }) : null
+      jsx('div', { style: { color: fg2, fontSize: '0.85rem', marginTop: '4px' }, children: node.seat }),
+      jsx('div', { style: { color: fg2, fontSize: '0.85rem' }, children: `Last active: ${relTime(node.last_activity)}` }),
+      jsx('div', { style: { color: fg2, fontSize: '0.85rem' }, children: node.profile ? node.profile : 'Reference agent' }),
+      gaps > 0 ? jsx('div', { style: { marginTop: '6px', fontSize: '0.8rem', color: fg2 }, children: `${gaps} CAPABILITY GAP${gaps === 1 ? '' : 'S'}` }) : null
     ]
   })
 }

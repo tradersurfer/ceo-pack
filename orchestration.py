@@ -144,7 +144,7 @@ _RISK_TEXT_FIELDS = ("task", "goal", "decision", "chosen", "reason", "notes", "o
 _RISK_CUES = {
     "legal_or_financial": re.compile(
         r"\b(pay(?:ing|ment|ments)?\b(?!\s+attention)|wire|wiring|transfer funds?|refund(?:s|ing)?|"
-        r"payroll|sign(?:ing)?\s+(?:the|a|an|our|this)?\s*(?:contract|agreement|nda|lease|offer)|"
+        r"payroll|sign(?:ing)?\s+(?:the|a|an|our|this)?\s*(?:\w+\s+){0,3}?(?:contract|agreement|nda|lease|offer)|"
         r"countersign|loan|borrow|invest(?:ing|ment)?|buy\s+(?:crypto|bitcoin|stock|shares))\b", re.I),
     "external": re.compile(
         r"\b(?:send|email|post|publish|announce|submit|tweet|reply|notify|message)\b"
@@ -165,6 +165,9 @@ _RISK_CUES = {
         r"\b(?:rotate|reset|grant|revoke|disable|share)\b[^.]{0,25}\b(?:password|credentials?|keys?|access|permissions?|2fa|mfa)\b", re.I),
     "reputation": re.compile(
         r"\b(?:press\s+release|public\s+statement|apolog(?:y|ize)|respond\s+to\s+(?:the\s+)?(?:press|media|review))\b", re.I),
+    "outside_authority": re.compile(
+        r"\b(?:sign(?:ing)?\s+(?:the|a|an|our|this)?\s*(?:\w+\s+){0,3}?(?:contract|agreement|nda|lease|offer)|"
+        r"countersign|on\s+behalf\s+of)\b", re.I),
 }
 
 _DATA_ACCESS_CUE = re.compile(

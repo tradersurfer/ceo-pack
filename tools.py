@@ -47,7 +47,7 @@ _ROUTE_TERMS = {
     "CTO": r"technology|tech|engineering|software|security|infrastructure|database|code|api|deploy(?:ment)?|bugs?|websites?|checkout|debugg\w*|refactor\w*|errors?|crash\w*|servers?|hosting|domains?",
     "CRO": r"revenue|sales|pipeline|leads?|prospects?|prices?|pricing|discounts?|quotes?|outreach|prospect\w*|follow[- ]ups?|proposals?|deals?|close|crm|negotiat\w*|support|tickets?|complaints?|churn",
     "CMO": r"marketing|brand(?:ing)?|content|campaigns?|social media|seo|launch|newsletter|subscribers?|announce\w*|promotions?|posts?|captions?|blogs?|ads|advertising|funnel|conversions?|landing page",
-    "Chief of Staff": r"people|hiring|hire|recruit\w*|onboarding|culture|hr|team|summar\w*|briefings?|draft|write|rewrite|proofread|email|meeting notes|action items|interviews?|candidates?|resumes?|screening|job offer",
+    "Chief of Staff": r"people|hiring|hire|recruit\w*|onboarding|culture|hr|team|summar\w*|briefings?|draft|write|rewrite|proofread|email|meeting notes|action items|interviews?|candidates?|resumes?|screening|job offer|fire|firing|terminate|terminating|lay\s?offs?|demote|demotion|discipline|dismiss\w*|shift\s+lead",
     "COO (Hermes)": r"operations?|ops|process(?:es)?|logistics|vendors?|schedule|cadence|workflows?|inbox|calendar|extract\w*|documents?|paperwork|monitor\w*|alerts?|sops?|projects?|timeline|deadline|checklists?|suppliers?",
     "CEO": r"strategy|research|vision|priorities|brainstorm\w*|roadmap|goals?|fundrais\w*|investors?|pitch|term sheet|cap table|funding|venture|mission",
 }

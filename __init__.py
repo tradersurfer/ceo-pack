@@ -75,9 +75,16 @@ def _on_post_tool_call(tool_name, args, result, task_id, **kwargs):
 
 def _ceo_command(raw_args):
     return (
-        "CEO Pack: use ceo_brief for a goal, ceo_route to pick a seat, "
-        "ceo_assign for one owner + one due date, and ceo_decision_log "
-        "to record the decision. External actions need owner approval. "
+        "CEO Pack: first read the user's question below and work out what "
+        "they are actually trying to achieve — say the goal back in one "
+        "plain sentence. That goal is the first tool call: ceo_brief with "
+        "the goal you just found, not a goal handed to you. Only then "
+        "ceo_route to pick a seat, ceo_assign for one owner + one due date, "
+        "and ceo_decision_log to record the decision. Never route before "
+        "the brief has a goal. If the question has no clear goal yet, ask "
+        "ONE short question to pin it down, then run the flow — do not "
+        "stall with a bare acknowledgement. External actions need owner "
+        "approval. "
         f"Input was: {raw_args}"
     )
 

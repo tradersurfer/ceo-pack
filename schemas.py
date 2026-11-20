@@ -14,7 +14,7 @@ CEO_BRIEF = {
     "parameters": {
         "type": "object",
         "properties": {
-            "goal": {"type": "string", "description": "The goal in one sentence."},
+            "goal": {"type": "string", "description": "The goal in one sentence — derive it from the user's question when they did not state one exactly."},
             "business_name": {"type": "string", "description": "Business name supplied by the user, if known."},
         },
         "required": ["goal"],

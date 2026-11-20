@@ -206,6 +206,40 @@
   margin-top: 20px;
 }
 
+/* --- Write actions --- */
+.ceo-approval-row {
+  margin: 6px 0;
+}
+
+.ceo-approval-actions {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+
+.ceo-detail-assign {
+  margin: 12px 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ceo-create-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.ceo-type1-check {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 14px;
+}
+
 /* --- Live states --- */
 /* A seat whose last registry activity is under 2 minutes old. The dot
    pulses; the node outline holds while it is live. Changed rows flash

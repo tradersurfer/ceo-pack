@@ -1,11 +1,10 @@
 # CEO Pack Dashboard — API Contract (v0.5.0)
 
 Base: `/api/plugins/ceo-pack/` — mounted by the Hermes dashboard host from
-`dashboard/plugin_api.py` (`router`). **All routes are GET, read-only.**
-There are no write routes by design: creating, approving, or assigning
-work goes through the chat tools (`ceo_task_create`, `ceo_task_approve`,
-`ceo_task_assign`), which run the lifecycle and permission checks. A
-`POST`/`PUT`/`PATCH`/`DELETE` to any route returns 405 (no such route).
+`dashboard/plugin_api.py` (`router`). **Reads are GET; writes are four
+POST routes** (below) that call the same `tasks.py` functions the chat
+tools call. The host authenticates every `/api/` call, so the dashboard
+caller is an authenticated Hermes user (the owner).
 
 ## Truth rules (apply to every endpoint)
 
@@ -35,6 +34,31 @@ work goes through the chat tools (`ceo_task_create`, `ceo_task_approve`,
   whose activity moved, or a feed line that just arrived flashes once
   for 5s after the poll that sees it. The first load never flashes —
   everything is new then.
+- `rejected` is a terminal lifecycle status, reachable only from
+  `proposed` (owner declines a task from the dashboard). Nothing exits
+  `rejected`; `completed_at` is set like the other terminal statuses.
+
+## Write routes (POST) — the dashboard acting for the owner
+
+Each route calls the same `tasks.py` function the matching chat tool
+calls, with the same validation the chat handler runs. Responses are the
+sanitized task object (same shape as the GET routes — no result/error
+payloads, no metadata). Error mapping, everywhere: unknown task → 404;
+wrong state / not Type 1 → 409 with a plain `detail` string; bad input →
+400; registry locked or unavailable → 503 (retryable). No traceback is
+ever returned. A `POST`/`PUT`/`PATCH`/`DELETE` to any other path returns
+405 (no such route).
+
+| Route | Backend | Rules |
+|---|---|---|
+| `POST /tasks` | `tasks.create_task` | Body `{run_id, seat, title, due_date?, description?, task_key?, owner?, model_route?, approval_required?, risk_flags?, parent_task_id?, metadata?}`. Missing/invalid required text → 400; unknown seat → 400; unknown `run_id` → 400 (the dashboard only offers existing runs); bad `due_date` → 400. `task_key` is idempotent per run: a repeat returns the existing task. Seat is canonicalized (`cfo` → `CFO`). |
+| `POST /tasks/{id}/approve` | `tasks.approve_task` | Task must exist → 404. Must be Type 1 (`approval_required`) → 409. Must be `proposed` → 409. `approved_by` is `"owner"`; the history note records the dashboard origin. |
+| `POST /tasks/{id}/reject` | `tasks.update_task_status(…, "rejected")` | Task must exist → 404. Must be `proposed` → 409. Optional body `{note?}`. History actor `"owner (dashboard)"`. Terminal — nothing exits `rejected`. |
+| `POST /tasks/{id}/assign` | `tasks.assign_task` + `move_to_assigned` | Body `{owner, model_route?}`. Owner is required text → 400 (mirrors the chat tool, which takes any owner text; the UI offers seats). Task must exist → 404. Status must be `approved`/`proposed` → 409. History actor `"owner (dashboard)"`. |
+
+Concurrency: the agent process and the web-server process both write the
+registry now. `_connect` sets `PRAGMA journal_mode=WAL` + a 10s busy
+timeout; a still-contended write surfaces as 503, never a hang or a 500.
 
 ## Endpoints
 

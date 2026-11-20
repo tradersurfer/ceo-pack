@@ -1,14 +1,18 @@
 """CEO Pack dashboard plugin — backend API routes, mounted at /api/plugins/ceo-pack/.
 
-Read-only. Every value comes from a real read of the persistent task
-registry (tasks.py) or the roster (orchestration.get_roster_view, seeded
-from the roster snapshot the agent process writes at registration).
-Nothing is invented: an empty registry returns empty lists and zero
-counts with an explicit empty flag, never fabricated activity.
+Reads come from a real read of the persistent task registry (tasks.py) or
+the roster (orchestration.get_roster_view, seeded from the roster snapshot
+the agent process writes at registration). Nothing is invented: an empty
+registry returns empty lists and zero counts with an explicit empty flag,
+never fabricated activity.
 
-No write routes exist by design. Any action (create/approve/assign) goes
-through the chat tools, which run the lifecycle + permission checks.
-A second task engine in the frontend is explicitly out of scope.
+Writes exist, but only as four POST routes that call the same tasks.py
+functions the chat tools call (create_task, approve_task, assign_task +
+move_to_assigned, update_task_status) — the same lifecycle + permission
+checks, the same SQLite registry, the same history audit. The host
+authenticates every /api/ call, so the dashboard caller is an
+authenticated Hermes user (the owner). A second task engine in the
+frontend is explicitly out of scope.
 
 Import note: the host loads this file as a top-level module via
 importlib.spec_from_file_location (see hermes_cli.web_server_dashboard),
@@ -58,6 +62,12 @@ except ImportError:  # host-independent test runs (stdlib unittest)
         def get(self, path: str):
             def deco(fn):
                 self.routes.append(("GET", path, fn))
+                return fn
+            return deco
+
+        def post(self, path: str):
+            def deco(fn):
+                self.routes.append(("POST", path, fn))
                 return fn
             return deco
 
@@ -414,3 +424,163 @@ def approvals():
         "history": [_public_history(h) for h in history],
         "decisions_note": DECISIONS_NOTE,
     }
+
+
+# ---------------------------------------------------------------------------
+# Write routes (POST) — the dashboard acting for the owner.
+#
+# Each route calls the same tasks.py function the matching chat tool calls,
+# with the same validation the chat handler runs, mapped to HTTP codes:
+# unknown task/run -> 404 (run) or 400 (run_id in a create body — the chat
+# tool takes any run_id, the dashboard only offers existing runs, so an
+# unknown one is a bad request), wrong state / not Type 1 -> 409, bad
+# input -> 400, registry locked/unavailable -> 503. Responses are the
+# sanitized task object (same shape as the GET routes). The host
+# authenticates every /api/ call, so the caller is an authenticated Hermes
+# user; the history records the actor as the owner acting from the
+# dashboard.
+# ---------------------------------------------------------------------------
+
+def _write_task_or_404(task_id: str) -> dict:
+    """Fetch a task for a write route, or 404. DB errors become 503."""
+    try:
+        task = _tasks.get_task(task_id)
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return task
+
+
+def _text_field(body: dict, name: str) -> str:
+    value = body.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(status_code=400, detail="%s is required text." % name)
+    return value.strip()
+
+
+def _optional_text(body: dict, name: str) -> Optional[str]:
+    value = body.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="%s must be text." % name)
+    return value
+
+
+@router.post("/tasks")
+def create_task_route(body: dict):
+    _require_db()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object.")
+    run_id = _text_field(body, "run_id")
+    seat = _text_field(body, "seat")
+    title = _text_field(body, "title")
+    if _orch is None:
+        raise HTTPException(status_code=503, detail="roster unavailable")
+    canonical_seat = _orch.normalize_seat(seat)
+    if canonical_seat is None:
+        raise HTTPException(status_code=400, detail="Unknown seat. Valid: %s" % ", ".join(_orch.SEATS))
+    due_date = _optional_text(body, "due_date")
+    if due_date is not None:
+        ok, note = _orch._check_due_date(due_date)
+        if not ok:
+            raise HTTPException(status_code=400, detail=note)
+    description = _optional_text(body, "description") or ""
+    task_key = _optional_text(body, "task_key")
+    owner = _optional_text(body, "owner")
+    model_route = _optional_text(body, "model_route")
+    parent_task_id = _optional_text(body, "parent_task_id")
+    risk_flags = body.get("risk_flags")
+    if risk_flags is not None and not isinstance(risk_flags, list):
+        raise HTTPException(status_code=400, detail="risk_flags must be a list.")
+    metadata = body.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise HTTPException(status_code=400, detail="metadata must be a JSON object.")
+    try:
+        if _tasks.get_task_run(run_id) is None:
+            raise HTTPException(status_code=400, detail="unknown run_id")
+        task_id = _tasks.create_task(
+            run_id=run_id,
+            seat=canonical_seat,
+            title=title,
+            description=description,
+            task_key=task_key,
+            due_date=due_date,
+            owner=owner,
+            model_route=model_route,
+            approval_required=bool(body.get("approval_required", False)),
+            risk_flags=risk_flags or [],
+            parent_task_id=parent_task_id,
+            metadata=metadata or {},
+        )
+        task = _tasks.get_task(task_id)
+    except HTTPException:
+        raise
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    if task is None:
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    return _public_task(task)
+
+
+@router.post("/tasks/{task_id}/approve")
+def approve_task_route(task_id: str):
+    _require_db()
+    task = _write_task_or_404(task_id)
+    if not task.get("approval_required"):
+        raise HTTPException(status_code=409, detail="Task does not require approval (not a Type 1 task)")
+    if task.get("status") != "proposed":
+        raise HTTPException(status_code=409, detail="Task is in '%s' state, not 'proposed'. Can only approve proposed tasks." % task.get("status"))
+    try:
+        ok = _tasks.approve_task(task_id, "owner", note="Type 1 approval granted (dashboard)")
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    if not ok:
+        raise HTTPException(status_code=409, detail="Task could not be approved (it may have moved already)")
+    return _public_task(_tasks.get_task(task_id))
+
+
+@router.post("/tasks/{task_id}/reject")
+def reject_task_route(task_id: str, body: Optional[dict] = None):
+    _require_db()
+    task = _write_task_or_404(task_id)
+    if task.get("status") != "proposed":
+        raise HTTPException(status_code=409, detail="Task is in '%s' state, not 'proposed'. Can only reject proposed tasks." % task.get("status"))
+    note = ""
+    if body is not None:
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="request body must be a JSON object.")
+        note = body.get("note") or ""
+        if not isinstance(note, str):
+            raise HTTPException(status_code=400, detail="note must be text.")
+    try:
+        ok = _tasks.update_task_status(task_id, "rejected", actor="owner (dashboard)", note=note or "Rejected from the dashboard")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    if not ok:
+        raise HTTPException(status_code=409, detail="Task could not be rejected (it may have moved already)")
+    return _public_task(_tasks.get_task(task_id))
+
+
+@router.post("/tasks/{task_id}/assign")
+def assign_task_route(task_id: str, body: dict):
+    _require_db()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object.")
+    owner = _text_field(body, "owner")
+    model_route = _optional_text(body, "model_route")
+    task = _write_task_or_404(task_id)
+    if task.get("status") not in ("approved", "proposed"):
+        raise HTTPException(status_code=409, detail="Task is in '%s' state. Can only assign approved/proposed tasks." % task.get("status"))
+    try:
+        ok = _tasks.assign_task(task_id, owner, model_route)
+        if ok:
+            ok = _tasks.move_to_assigned(task_id, actor="owner (dashboard)", note="Assigned to %s (dashboard)" % owner)
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    if not ok:
+        raise HTTPException(status_code=409, detail="Task could not be assigned (it may have moved already)")
+    return _public_task(_tasks.get_task(task_id))

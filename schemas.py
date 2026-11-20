@@ -319,7 +319,7 @@ CEO_TASK_LIST = {
         "properties": {
             "run_id": {"type": "string", "description": "Filter by orchestration run ID."},
             "seat": {"type": "string", "description": "Filter by seat (CEO, CFO, COO, CTO, CMO, CLO, Chief of Staff, CRO)."},
-            "status": {"type": "string", "description": "Filter by status: proposed, approved, assigned, running, blocked, completed, verified, failed."},
+            "status": {"type": "string", "description": "Filter by status: proposed, approved, assigned, running, blocked, completed, verified, failed, rejected."},
             "limit": {"type": "integer", "description": "Max tasks to return (default 50)."},
         },
         "required": [],

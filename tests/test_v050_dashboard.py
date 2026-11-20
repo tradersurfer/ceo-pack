@@ -9,7 +9,8 @@ Covers Chat's dashboard acceptance table:
 - tasks match the persistent registry
 - task status never invents transitions
 - approvals show actual pending decisions
-- unauthorized actions rejected (read-only API: no write routes)
+- unauthorized actions rejected (write routes are exactly the four
+  approved POST routes; every other route is GET)
 - refresh doesn't lose state
 - empty states show no fabricated activity
 - failed API requests are visible (status + detail, not silent)
@@ -208,7 +209,7 @@ class TestTasksMatchRegistry(DashboardBase):
 
 class TestStatusNeverInvented(DashboardBase):
     LEGAL = {"proposed", "approved", "assigned", "running", "blocked",
-             "completed", "verified", "failed"}
+             "completed", "verified", "failed", "rejected"}
 
     def test_status_is_exactly_the_registry_status(self):
         run_id = self.make_run()
@@ -439,10 +440,18 @@ class TestNoSecrets(DashboardBase):
             self.assertNotIn(banned, task)
 
 
-class TestErrorsVisibleAndReadOnly(DashboardBase):
-    def test_no_write_routes_exist(self):
+class TestErrorsVisible(DashboardBase):
+    def test_write_routes_are_exactly_the_approved_set(self):
+        posts = sorted(p for m, p in _routes() if m == {"POST"})
+        self.assertEqual(posts, [
+            "/tasks",
+            "/tasks/{task_id}/approve",
+            "/tasks/{task_id}/assign",
+            "/tasks/{task_id}/reject",
+        ])
         for methods, path in _routes():
-            self.assertEqual(methods, {"GET"}, path)
+            if methods != {"POST"}:
+                self.assertEqual(methods, {"GET"}, path)
 
     def test_unknown_task_and_run_are_404_not_silent(self):
         code, detail = _err_of(lambda: _call(api.task_detail, task_id="no-such-task"))
@@ -543,6 +552,181 @@ class TestLastActivity(DashboardBase):
             tasks_mod.get_seat_last_activity = orig
         for node in roster["seats"]:
             self.assertIsNone(node["last_activity"], node["seat"])
+
+
+class TestDashboardWrites(DashboardBase):
+    """The four POST routes: same backend, same checks as the chat tools,
+    mapped to HTTP codes. Every assertion compares against a direct
+    registry read, never against the response alone."""
+
+    def _type1_task(self, seat="CFO"):
+        run_id = self.make_run()
+        return self.make_task(run_id, seat=seat, approval_required=True)
+
+    def test_create_happy_path(self):
+        run_id = self.make_run()
+        out = _call(api.create_task_route, body={
+            "run_id": run_id, "seat": "cfo", "title": "Reconcile books",
+            "approval_required": True})
+        self.assertEqual(out["seat"], "CFO")
+        self.assertEqual(out["status"], "proposed")
+        self.assertTrue(out["approval_required"])
+        row = tasks_mod.get_task(out["task_id"])
+        self.assertEqual(row["status"], "proposed")
+        self.assertEqual(row["seat"], "CFO")
+
+    def test_create_requires_fields(self):
+        run_id = self.make_run()
+        for body in ({"seat": "CFO", "title": "x"},
+                     {"run_id": run_id, "title": "x"},
+                     {"run_id": run_id, "seat": "CFO"}):
+            code, _d = _err_of(lambda: _call(api.create_task_route, body=body))
+            self.assertEqual(code, 400, body)
+        code, _d = _err_of(lambda: _call(api.create_task_route, body=["not", "a", "dict"]))
+        self.assertEqual(code, 400)
+
+    def test_create_rejects_unknown_seat_run_and_due_date(self):
+        run_id = self.make_run()
+        code, _d = _err_of(lambda: _call(api.create_task_route, body={
+            "run_id": run_id, "seat": "Wizard", "title": "x"}))
+        self.assertEqual(code, 400)
+        code, _d = _err_of(lambda: _call(api.create_task_route, body={
+            "run_id": "no-such-run", "seat": "CFO", "title": "x"}))
+        self.assertEqual(code, 400)
+        code, _d = _err_of(lambda: _call(api.create_task_route, body={
+            "run_id": run_id, "seat": "CFO", "title": "x", "due_date": "not-a-date"}))
+        self.assertEqual(code, 400)
+
+    def test_create_task_key_is_idempotent(self):
+        run_id = self.make_run()
+        body = {"run_id": run_id, "seat": "CFO", "title": "One",
+                "task_key": "books-oct"}
+        first = _call(api.create_task_route, body=body)
+        second = _call(api.create_task_route, body=body)
+        self.assertEqual(first["task_id"], second["task_id"])
+        self.assertEqual(len(tasks_mod.get_tasks_by_run(run_id)), 1)
+
+    def test_create_response_strips_secrets(self):
+        run_id = self.make_run()
+        out = _call(api.create_task_route, body={
+            "run_id": run_id, "seat": "CFO", "title": "x",
+            "metadata": {"secret": "shh"}, "description": "d"})
+        for forbidden in ("metadata", "result", "error", "result_json", "error_json"):
+            self.assertNotIn(forbidden, out)
+
+    def test_approve_happy_path(self):
+        tid = self._type1_task()
+        out = _call(api.approve_task_route, task_id=tid)
+        self.assertEqual(out["status"], "approved")
+        self.assertEqual(out["approved_by"], "owner")
+        row = tasks_mod.get_task(tid)
+        self.assertEqual(row["status"], "approved")
+        hist = tasks_mod.get_task_history(tid)
+        approved = [h for h in hist if h["to_status"] == "approved"]
+        self.assertEqual(len(approved), 1)
+        self.assertEqual(approved[0]["actor"], "owner")
+        self.assertIn("dashboard", approved[0]["note"])
+
+    def test_approve_rejects_non_type1_wrong_state_and_unknown(self):
+        run_id = self.make_run()
+        plain = self.make_task(run_id)
+        code, _d = _err_of(lambda: _call(api.approve_task_route, task_id=plain))
+        self.assertEqual(code, 409)
+        tid = self._type1_task()
+        self.walk(tid, "approved", "assigned")
+        code, _d = _err_of(lambda: _call(api.approve_task_route, task_id=tid))
+        self.assertEqual(code, 409)
+        code, _d = _err_of(lambda: _call(api.approve_task_route, task_id="no-such-task"))
+        self.assertEqual(code, 404)
+        tid2 = self._type1_task()
+        _call(api.approve_task_route, task_id=tid2)
+        code, _d = _err_of(lambda: _call(api.approve_task_route, task_id=tid2))
+        self.assertEqual(code, 409)
+
+    def test_reject_happy_path_is_terminal(self):
+        run_id = self.make_run()
+        tid = self.make_task(run_id)
+        out = _call(api.reject_task_route, task_id=tid, body={})
+        self.assertEqual(out["status"], "rejected")
+        row = tasks_mod.get_task(tid)
+        self.assertEqual(row["status"], "rejected")
+        self.assertIsNotNone(row["completed_at"])
+        # Terminal: no exit, from any route or the raw transition table.
+        self.assertFalse(tasks_mod.update_task_status(tid, "approved", db_path=self.db))
+        code, _d = _err_of(lambda: _call(api.approve_task_route, task_id=tid))
+        self.assertEqual(code, 409)
+        code, _d = _err_of(lambda: _call(api.assign_task_route, task_id=tid, body={"owner": "CFO"}))
+        self.assertEqual(code, 409)
+        hist = tasks_mod.get_task_history(tid)
+        rejected = [h for h in hist if h["to_status"] == "rejected"]
+        self.assertEqual(rejected[0]["actor"], "owner (dashboard)")
+
+    def test_reject_wrong_state_and_unknown(self):
+        run_id = self.make_run()
+        tid = self.make_task(run_id)
+        self.walk(tid, "approved", "assigned")
+        code, _d = _err_of(lambda: _call(api.reject_task_route, task_id=tid, body={}))
+        self.assertEqual(code, 409)
+        code, _d = _err_of(lambda: _call(api.reject_task_route, task_id="no-such-task", body={}))
+        self.assertEqual(code, 404)
+
+    def test_rejected_shows_in_counts(self):
+        run_id = self.make_run()
+        tid = self.make_task(run_id)
+        _call(api.reject_task_route, task_id=tid, body={})
+        self.assertEqual(_call(api.summary)["tasks_by_status"], {"rejected": 1})
+        self.assertIn("rejected", TestStatusNeverInvented.LEGAL)
+
+    def test_assign_happy_path(self):
+        run_id = self.make_run()
+        tid = self.make_task(run_id)
+        out = _call(api.assign_task_route, task_id=tid, body={"owner": "CFO"})
+        self.assertEqual(out["status"], "assigned")
+        self.assertEqual(out["owner"], "CFO")
+        row = tasks_mod.get_task(tid)
+        self.assertEqual(row["owner"], "CFO")
+        hist = tasks_mod.get_task_history(tid)
+        assigned = [h for h in hist if h["to_status"] == "assigned"]
+        self.assertEqual(assigned[-1]["actor"], "owner (dashboard)")
+        # Approved tasks assign too.
+        tid2 = self._type1_task()
+        _call(api.approve_task_route, task_id=tid2)
+        out2 = _call(api.assign_task_route, task_id=tid2, body={"owner": "CTO"})
+        self.assertEqual(out2["status"], "assigned")
+
+    def test_assign_rejects_wrong_state_unknown_and_bad_input(self):
+        run_id = self.make_run()
+        tid = self.make_task(run_id)
+        self.walk(tid, "approved", "assigned", "running")
+        code, _d = _err_of(lambda: _call(api.assign_task_route, task_id=tid, body={"owner": "CFO"}))
+        self.assertEqual(code, 409)
+        code, _d = _err_of(lambda: _call(api.assign_task_route, task_id="no-such-task", body={"owner": "CFO"}))
+        self.assertEqual(code, 404)
+        tid2 = self.make_task(run_id)
+        code, _d = _err_of(lambda: _call(api.assign_task_route, task_id=tid2, body={}))
+        self.assertEqual(code, 400)
+        code, _d = _err_of(lambda: _call(api.assign_task_route, task_id=tid2, body={"owner": 123}))
+        self.assertEqual(code, 400)
+
+    def test_locked_registry_returns_503_not_500(self):
+        import sqlite3
+        tid = self._type1_task()
+        locker = sqlite3.connect(self.db)
+        locker.execute("BEGIN EXCLUSIVE")
+        orig_connect = sqlite3.connect
+
+        def _fast_connect(*args, **kwargs):
+            kwargs["timeout"] = 0.05
+            return orig_connect(*args, **kwargs)
+
+        sqlite3.connect = _fast_connect
+        try:
+            code, _d = _err_of(lambda: _call(api.approve_task_route, task_id=tid))
+        finally:
+            sqlite3.connect = orig_connect
+            locker.execute("ROLLBACK")
+            locker.close()
+        self.assertEqual(code, 503)
 
 
 if __name__ == "__main__":

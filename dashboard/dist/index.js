@@ -5,11 +5,15 @@
  * host components and SDK.fetchJSON for API calls (host auth handling);
  * registers via window.__HERMES_PLUGINS__.register("ceo-pack", ...).
  *
- * Read-only by design: the UI displays registry/roster state and links
- * every number to a backend read. There are no write actions — creating,
- * approving, or assigning work goes through the chat tools, which run the
- * lifecycle and permission checks. A second task engine in the frontend
- * is explicitly out of scope.
+ * Writes: four POST routes (create / approve / reject / assign) that call
+ * the same tasks.py functions the chat tools call — the same lifecycle +
+ * permission checks, the same registry, the same history audit. The host
+ * authenticates every /api/ call, so the dashboard caller is an
+ * authenticated Hermes user (the owner). Write buttons disable while their
+ * request is in flight; a failed write shows the server's detail string
+ * inline instead of failing silently. No write UI is rendered for actions
+ * the registry forbids (Approve/Reject only on proposed Type 1 tasks,
+ * Assign only on proposed/approved ones).
  *
  * Runtime truth: a task's status is shown exactly as the registry holds
  * it. Assigned is not "in progress", completed is not "verified". Where a
@@ -55,6 +59,17 @@
 
   var API = "/api/plugins/ceo-pack";
 
+  // Authenticated POST helper (kanban pattern): same session-token
+  // handling as fetchJSON, standard RequestInit. A failed write throws
+  // with the server's detail string, which the UI shows inline.
+  function postJSON(path, body) {
+    return fetchJSON(API + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+  }
+
   // Live window: what we last saw, so a seat that just moved, a task whose
   // status just changed, or a feed line that just arrived can flash once
   // instead of silently re-rendering. A seat counts as "live" when its
@@ -71,13 +86,13 @@
     return !isNaN(t) && (Date.now() - t) < LIVE_WINDOW_MS;
   }
 
-  var STATUS_ORDER = ["proposed", "approved", "assigned", "running", "blocked", "completed", "verified", "failed"];
+  var STATUS_ORDER = ["proposed", "approved", "assigned", "running", "blocked", "completed", "verified", "failed", "rejected"];
   var STATUS_LABEL = {
     proposed: "Proposed", approved: "Approved", assigned: "Assigned",
     running: "Running", blocked: "Blocked", completed: "Completed",
-    verified: "Verified", failed: "Failed",
+    verified: "Verified", failed: "Failed", rejected: "Rejected",
   };
-  var TERMINAL = { completed: true, verified: true, failed: true };
+  var TERMINAL = { completed: true, verified: true, failed: true, rejected: true };
 
   // FastAPI bodies look like {"detail": "<message>"}. Pull the readable
   // message out so banners don't leak HTTP plumbing at the user.
@@ -153,13 +168,17 @@
   function TaskDetail(props) {
     var d = props.detail;
     if (!d) return null;
+    var _as = useState(d.seat || "");
+    var assignSeat = _as[0], setAssignSeat = _as[1];
+    var status = d.task_status || d.status;
+    var assignable = status === "proposed" || status === "approved";
     return h(Card, { className: "ceo-detail" },
       h(CardHeader, null,
         h(CardTitle, null, d.title || "(untitled task)"),
         h(Button, { className: "ceo-close", onClick: props.onClose }, "Close")),
       h(CardContent, null,
         h("div", { className: "ceo-detail-grid" },
-          h("div", null, h("strong", null, "Status: "), h(StatusBadge, { status: d.task_status || d.status })),
+          h("div", null, h("strong", null, "Status: "), h(StatusBadge, { status: status })),
           h("div", null, h("strong", null, "Seat: "), d.seat || "unknown"),
           h("div", null, h("strong", null, "Owner: "), d.owner || "unassigned"),
           h("div", null, h("strong", null, "Route: "), d.model_route || "not routed"),
@@ -169,6 +188,22 @@
           h("div", null, h("strong", null, "Completed: "), timeOrUnknown(d.completed_at)),
           h("div", null, h("strong", null, "Approved by: "), d.approved_by || "—"),
           h("div", null, h("strong", null, "Retries: "), String(d.retry_count == null ? 0 : d.retry_count))),
+        assignable
+          ? h("div", { className: "ceo-detail-assign" },
+              h("h4", null, "Assign"),
+              h("select", {
+                className: "ceo-select", value: assignSeat,
+                onChange: function (e) { setAssignSeat(e.target.value); },
+              },
+                h("option", { value: "" }, "Pick a seat…"),
+                (props.seats || []).map(function (s) {
+                  return h("option", { key: s.seat, value: s.seat }, s.display_name || s.seat);
+                })),
+              h(Button, {
+                disabled: !assignSeat || props.assignBusy,
+                onClick: function () { props.onAssign(assignSeat); },
+              }, props.assignBusy ? "Assigning…" : "Assign"))
+          : null,
         h("div", { className: "ceo-detail-exec" },
           h("h4", null, "Delegated execution"),
           (function () {
@@ -215,6 +250,61 @@
                 ev.note ? h("span", { className: "ceo-history-note" }, " — " + ev.note) : null);
             }))
           : h(EmptyState, null, "No recorded transitions yet — the task has not moved.")));
+  }
+
+  function CreateTaskForm(props) {
+    var _t = useState("");
+    var title = _t[0], setTitle = _t[1];
+    var _s = useState("");
+    var seat = _s[0], setSeat = _s[1];
+    var _r = useState("");
+    var runId = _r[0], setRunId = _r[1];
+    var _a = useState(false);
+    var type1 = _a[0], setType1 = _a[1];
+    var runs = props.runs || [];
+    var effectiveRun = runId || (runs[0] && runs[0].run_id) || "";
+    var canSubmit = title.trim() && seat && effectiveRun && !props.busy;
+    function submit() {
+      if (!canSubmit) return;
+      props.onCreate({
+        run_id: effectiveRun, seat: seat,
+        title: title.trim(), approval_required: type1,
+      }).then(function () {
+        setTitle(""); setType1(false);
+      }, function () { /* error shown by the parent */ });
+    }
+    if (!runs.length) {
+      return h("p", { className: "ceo-note" },
+        "No runs yet — create one from chat (ceo_run_create) and it appears here.");
+    }
+    return h("div", { className: "ceo-create-form" },
+      h(Input, {
+        className: "ceo-search", placeholder: "New task title…",
+        value: title, onChange: function (e) { setTitle(e.target.value); },
+      }),
+      h("select", {
+        className: "ceo-select", value: seat,
+        onChange: function (e) { setSeat(e.target.value); },
+      },
+        h("option", { value: "" }, "Seat…"),
+        (props.seats || []).map(function (s) {
+          return h("option", { key: s.seat, value: s.seat }, s.display_name || s.seat);
+        })),
+      h("select", {
+        className: "ceo-select", value: effectiveRun,
+        onChange: function (e) { setRunId(e.target.value); },
+      },
+        runs.map(function (r) {
+          return h("option", { key: r.run_id, value: r.run_id }, r.goal || r.run_id);
+        })),
+      h("label", { className: "ceo-type1-check" },
+        h("input", {
+          type: "checkbox", checked: type1,
+          onChange: function (e) { setType1(e.target.checked); },
+        }),
+        " Type 1 (needs owner approval)"),
+      h(Button, { disabled: !canSubmit, onClick: submit },
+        props.busy ? "Creating…" : "Create task"));
   }
 
   function OrgNode(props) {
@@ -272,6 +362,10 @@
     var filterStatus = _fs[0], setFilterStatus = _fs[1];
     var _ch = useState({ tasks: {}, seats: {}, history: {}, at: 0 });
     var changed = _ch[0], setChanged = _ch[1];
+    var _wb = useState(null);
+    var writeBusy = _wb[0], setWriteBusy = _wb[1];
+    var _we = useState(null);
+    var writeError = _we[0], setWriteError = _we[1];
 
     var load = useCallback(function () {
       setLoading(true);
@@ -356,6 +450,7 @@
     var tasks = ((data && data.tasks) || {}).tasks || [];
     var activity = (data && data.activity) || null;
     var approvals = (data && data.approvals) || null;
+    var runs = ((data && data.runs) || {}).runs || [];
 
     var filteredTasks = useMemo(function () {
       var q = filterText.trim().toLowerCase();
@@ -379,6 +474,35 @@
     function panelError(key, what) {
       if (!errors[key]) return null;
       return h(ErrorBox, { what: what, message: errors[key], onRetry: load });
+    }
+
+    // One write at a time per key: the button disables, the request runs,
+    // success re-fetches everything (the 30s poll's change flash shows the
+    // result), failure shows the server's detail string inline.
+    function doWrite(key, promise) {
+      setWriteError(null);
+      setWriteBusy(key);
+      promise.then(function () {
+        setWriteBusy(null);
+        load();
+        if (selectedTaskId) {
+          fetchJSON(API + "/tasks/" + encodeURIComponent(selectedTaskId)).then(
+            function (v) { setSelectedTask(v); },
+            function (err) { setSelectedTask({ _error: parseApiErrorMessage(err) }); });
+        }
+      }, function (err) {
+        setWriteBusy(null);
+        setWriteError(parseApiErrorMessage(err));
+      });
+      return promise;
+    }
+
+    function writeErrorBox() {
+      if (!writeError) return null;
+      return h("div", { className: "ceo-error", role: "alert" },
+        h("strong", null, "That didn't go through. "),
+        h("span", null, writeError),
+        h(Button, { className: "ceo-retry", onClick: function () { setWriteError(null); } }, "Dismiss"));
     }
 
     function renderSummaryStrip() {
@@ -485,11 +609,29 @@
             className: "ceo-search", placeholder: "Search tasks…",
             value: filterText, onChange: function (e) { setFilterText(e.target.value); },
           })),
+        writeErrorBox(),
         selectedTask
           ? (selectedTask._error
               ? h(ErrorBox, { what: "task detail", message: selectedTask._error, onRetry: function () { setSelectedTaskId(null); } })
-              : h(TaskDetail, { detail: selectedTask, onClose: function () { setSelectedTaskId(null); } }))
+              : h(TaskDetail, {
+                  detail: selectedTask,
+                  onClose: function () { setSelectedTaskId(null); },
+                  seats: roster ? roster.seats : [],
+                  assignBusy: writeBusy === "assign:" + selectedTask.task_id,
+                  onAssign: function (seat) {
+                    doWrite("assign:" + selectedTask.task_id,
+                      postJSON("/tasks/" + encodeURIComponent(selectedTask.task_id) + "/assign", { owner: seat }));
+                  },
+                }))
           : null,
+        h(CreateTaskForm, {
+          runs: runs,
+          seats: roster ? roster.seats : [],
+          busy: writeBusy === "create",
+          onCreate: function (fields) {
+            return doWrite("create", postJSON("/tasks", fields));
+          },
+        }),
         tasks.length === 0
           ? h(EmptyState, null, "No tasks in the registry yet. Create one from chat (ceo_task_create) — it appears here, with its real status, once it exists.")
           : STATUS_ORDER.map(function (s) {
@@ -509,10 +651,22 @@
       var pending = approvals.pending || [];
       var hist = approvals.history || [];
       return h("div", null,
+        writeErrorBox(),
         h("h3", null, "Pending owner approval (" + approvals.pending_count + ")"),
         pending.length
           ? pending.map(function (t) {
-              return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
+              var key = t.task_id;
+              return h("div", { key: key, className: "ceo-approval-row" },
+                h(TaskCard, { task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] }),
+                h("div", { className: "ceo-approval-actions" },
+                  h(Button, {
+                    disabled: writeBusy === "approve:" + key,
+                    onClick: function () { doWrite("approve:" + key, postJSON("/tasks/" + encodeURIComponent(key) + "/approve", {})); },
+                  }, writeBusy === "approve:" + key ? "Approving…" : "Approve"),
+                  h(Button, {
+                    disabled: writeBusy === "reject:" + key,
+                    onClick: function () { doWrite("reject:" + key, postJSON("/tasks/" + encodeURIComponent(key) + "/reject", {})); },
+                  }, writeBusy === "reject:" + key ? "Rejecting…" : "Reject")));
             })
           : h(EmptyState, null, "Nothing waiting on the owner right now."),
         h("h3", null, "Approval history"),

@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     seat TEXT NOT NULL,                  -- canonical seat: CEO, CFO, COO, CTO, CMO, CLO, Chief of Staff, CRO
     title TEXT NOT NULL,                 -- human-readable task title
     description TEXT,                    -- detailed description
-    status TEXT NOT NULL DEFAULT 'proposed',  -- proposed | approved | assigned | running | blocked | completed | verified | failed
+    status TEXT NOT NULL DEFAULT 'proposed',  -- proposed | approved | assigned | running | blocked | completed | verified | failed | rejected
     priority INTEGER DEFAULT 0,          -- higher = more urgent
     owner TEXT,                          -- profile name or Hermes profile id bound to the seat
     model_route TEXT,                    -- model_map option name or profile_routes profile name
@@ -108,10 +108,16 @@ def _resolve_db_path(custom_path: Optional[str] = None) -> Path:
 def _connect(db_path: Optional[str] = None):
     path = _resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    # WAL + a real busy timeout: the agent process and the dashboard
+    # web-server process both write this DB now (dashboard POST routes).
+    # WAL lets readers proceed while a writer holds the DB; the timeout
+    # turns a still-contended write into a quick, catchable error instead
+    # of an indefinite hang.
+    conn = sqlite3.connect(path, timeout=10.0)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode=WAL")
         yield conn
         conn.commit()
     except Exception:
@@ -328,6 +334,7 @@ def get_tasks_by_seat(seat: str, status: Optional[str] = None, db_path: Optional
 # tests drive proposed -> approved through here).
 _LEGAL_TRANSITIONS = {
     ("proposed", "approved"),
+    ("proposed", "rejected"),
     ("approved", "assigned"),
     ("assigned", "running"),
     ("running", "blocked"),
@@ -354,7 +361,7 @@ def update_task_status(
     Illegal transitions (not in _LEGAL_TRANSITIONS) return False and
     leave the row untouched; unknown statuses raise ValueError.
     """
-    valid_statuses = {"proposed", "approved", "assigned", "running", "blocked", "completed", "verified", "failed"}
+    valid_statuses = {"proposed", "approved", "assigned", "running", "blocked", "completed", "verified", "failed", "rejected"}
     if new_status not in valid_statuses:
         raise ValueError(f"Invalid status: {new_status}. Valid: {valid_statuses}")
 
@@ -377,7 +384,7 @@ def update_task_status(
         if new_status == "running" and old_status != "running":
             updates.append("started_at = ?")
             params.append(now)
-        if new_status in ("completed", "verified", "failed"):
+        if new_status in ("completed", "verified", "failed", "rejected"):
             updates.append("completed_at = ?")
             params.append(now)
         if result is not None:
@@ -433,7 +440,7 @@ def move_to_assigned(task_id: str, actor: str = "system", note: str = "", db_pat
         return changed
 
 
-def approve_task(task_id: str, approved_by: str, db_path: Optional[str] = None) -> bool:
+def approve_task(task_id: str, approved_by: str, note: Optional[str] = None, db_path: Optional[str] = None) -> bool:
     """Mark task as approved (for Type 1 gates)."""
     now = datetime.now(timezone.utc).isoformat()
     with _connect(db_path) as conn:
@@ -443,7 +450,7 @@ def approve_task(task_id: str, approved_by: str, db_path: Optional[str] = None) 
         )
         changed = conn.total_changes > 0
         if changed:
-            _log_history(conn, task_id, "proposed", "approved", approved_by, "Type 1 approval granted")
+            _log_history(conn, task_id, "proposed", "approved", approved_by, note or "Type 1 approval granted")
     return changed
 
 

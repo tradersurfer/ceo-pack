@@ -1,0 +1,1 @@
+{"api":"plugin_api.py","css":"dist/style.css","description":"Executive workspace — org chart, live agent activity, task board, and approvals for your AI C-suite.","entry":"dist/index.js","icon":"Users","label":"CEO Pack","name":"ceo-pack","tab":{"path":"/ceo-pack","position":"after:kanban"},"version":"0.5.0"}

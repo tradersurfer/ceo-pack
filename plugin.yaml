@@ -1,9 +1,12 @@
 name: ceo-pack
-version: 0.4.1
-description: CEO Pack — a CEO orchestration layer for Hermes. Brief, route, plan, assign, call, verify, log, with Hermes as COO. One owner and one due date per task, Type 1 / Type 2 decision gating, credential-safe tool calls, and owner approval for external actions. v0.4.0 adds seat aliases (promote your agents to the C-Suite), head CEO config, capability checks, 9 new slash commands, and a hardened router and verifier. The agent runs on your Hermes model; the plugin recommends a pick per job — free default Nemotron 3 Ultra free, GLM Flash free fallback, paid Claude Sonnet 5.5 / Opus 5.5 overrides. The plugin returns model choices; it does not call a model itself (stdlib-only, catalog-safe).
+version: 0.5.0
+manifest_version: 2
+description: CEO Pack gives you an AI C-suite inside Hermes. You say what your business needs in plain words, and the pack turns it into a plan — it works out which seat should own each job (money, legal, marketing, tech, operations, or the chief of staff), assigns it, and checks the work before calling it done. Anything big, priced, or hard to undo stops and asks for your approval first, so you stay the boss. v0.5.0 adds a dashboard tab, a persistent task registry, and delegation you can configure from chat. For developers — stdlib-only, no network calls and no model calls. The plugin routes and verifies work on your Hermes model, suggests a free model by default, and keeps every task, decision, and run in a local registry.
 author: tradersurfer93
 license: MIT
-requires_hermes: ">=0.21.6"
+requires_hermes: ">=0.22.5"
+requires_plugins:
+  - id: bot-forge
 provides_tools:
   - ceo_brief
   - ceo_assign
@@ -19,6 +22,13 @@ provides_tools:
   - ceo_performance_check
   - ceo_status_check
   - ceo_roster
+  - ceo_task_create
+  - ceo_task_status
+  - ceo_task_list
+  - ceo_task_approve
+  - ceo_task_assign
+  - ceo_run_create
+  - ceo_run_status
 provides_hooks:
   - post_tool_call
 config_schema:

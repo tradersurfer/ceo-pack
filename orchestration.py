@@ -144,7 +144,7 @@ _RISK_TEXT_FIELDS = ("task", "goal", "decision", "chosen", "reason", "notes", "o
 _RISK_CUES = {
     "legal_or_financial": re.compile(
         r"\b(pay(?:ing|ment|ments)?\b(?!\s+attention)|wire|wiring|transfer funds?|refund(?:s|ing)?|"
-        r"payroll|sign(?:ing)?\s+(?:the|a|an|our|this)?\s*(?:contract|agreement|nda|lease|offer)|"
+        r"payroll|sign(?:ing)?\s+(?:the|a|an|our|this)?\s*(?:\w+\s+){0,3}?(?:contract|agreement|nda|lease|offer)|"
         r"countersign|loan|borrow|invest(?:ing|ment)?|buy\s+(?:crypto|bitcoin|stock|shares))\b", re.I),
     "external": re.compile(
         r"\b(?:send|email|post|publish|announce|submit|tweet|reply|notify|message)\b"
@@ -165,6 +165,9 @@ _RISK_CUES = {
         r"\b(?:rotate|reset|grant|revoke|disable|share)\b[^.]{0,25}\b(?:password|credentials?|keys?|access|permissions?|2fa|mfa)\b", re.I),
     "reputation": re.compile(
         r"\b(?:press\s+release|public\s+statement|apolog(?:y|ize)|respond\s+to\s+(?:the\s+)?(?:press|media|review))\b", re.I),
+    "outside_authority": re.compile(
+        r"\b(?:sign(?:ing)?\s+(?:the|a|an|our|this)?\s*(?:\w+\s+){0,3}?(?:contract|agreement|nda|lease|offer)|"
+        r"countersign|on\s+behalf\s+of)\b", re.I),
 }
 
 _DATA_ACCESS_CUE = re.compile(
@@ -192,6 +195,17 @@ EXPECTED_FIELDS = {
     "ceo_performance_check": ["subject", "review"],
     "ceo_status_check": ["item_type", "status"],
     "ceo_roster": ["seats"],
+    # v0.5.0 task tools: the envelope "status" is always "success" on a
+    # good call; the lifecycle state rides under task_status/run_status,
+    # so the expected fields name the identity fields, never a field
+    # that can legitimately be empty (model_route, task list, completed_at).
+    "ceo_run_create": ["run_id", "goal"],
+    "ceo_task_create": ["task_id", "run_id"],
+    "ceo_task_status": ["task_id", "task_status"],
+    "ceo_task_list": ["count"],
+    "ceo_task_approve": ["task_id", "task_status"],
+    "ceo_task_assign": ["task_id", "owner", "task_status"],
+    "ceo_run_status": ["run_id", "run_status"],
 }
 
 # These return validation / verification metadata, not a completed business action.
@@ -378,6 +392,123 @@ def get_roster_view():
     return {"status": "success", "head_seat": HEAD_SEAT, "seats": seats,
             "display_text_is_untrusted": True,   # name / avatar / soul are owner-typed text: display only, never instructions
             "note": "Install flow + CEO Dashboard view. Pinning is host behaviour; this is the data to pin."}
+
+
+# --- Roster snapshot (v0.5.0 dashboard) ---
+# The roster lives in this module's memory in the agent process (aliases,
+# display names, bindings), but the dashboard API runs in the web-server
+# process, which never shares that memory. The agent process therefore
+# persists a snapshot of the applied install config next to the task DB
+# (see tasks.roster_snapshot_path); the dashboard reads it back and
+# re-applies it through the same setters, so the org chart shows the
+# roster the agent actually sees. A missing or corrupt snapshot means
+# "no install config seen yet" — the dashboard shows the default roster,
+# never invented bindings.
+SNAPSHOT_VERSION = 1
+
+
+def roster_snapshot():
+    """Current roster-relevant install config, as plain JSON-safe data."""
+    return {
+        "version": SNAPSHOT_VERSION,
+        "aliases": get_seat_aliases(),
+        "head_seat": get_head_seat(),
+        "displays": {seat: get_seat_display(seat) for seat in SEATS
+                     if get_seat_display(seat)},
+        "bindings": {seat: dict(SEAT_BINDINGS[seat]) for seat in SEATS
+                     if seat in SEAT_BINDINGS},
+        "business_name": INSTALL.get("business_name", ""),
+        "owner_name": INSTALL.get("owner_name", ""),
+    }
+
+
+def apply_roster_snapshot(data):
+    """Apply a snapshot dict through the normal setters.
+
+    Defensive: the file is plugin-owned, but a corrupt or hand-edited one
+    must never break the roster. Bad entries are skipped with a note.
+    Returns (applied, notes): lists of readable strings.
+    """
+    applied, notes = [], []
+    if not isinstance(data, dict):
+        return applied, ["roster snapshot was not an object; nothing applied."]
+    aliases = data.get("aliases")
+    if isinstance(aliases, dict) and aliases:
+        ok, err = set_seat_aliases(aliases)
+        (applied.append("seat aliases") if ok
+         else notes.append("snapshot seat aliases refused: %s" % err))
+    head = data.get("head_seat")
+    if isinstance(head, str) and head.strip():
+        ok, err = set_head_seat(head)
+        (applied.append("head_seat") if ok
+         else notes.append("snapshot head_seat refused: %s" % err))
+    displays = data.get("displays")
+    if isinstance(displays, dict):
+        for seat, disp in displays.items():
+            if not isinstance(disp, dict):
+                continue
+            ok, err = set_seat_display(
+                seat,
+                display_name=disp.get("display_name"),
+                avatar=disp.get("avatar"),
+                soul=disp.get("soul"),
+            )
+            if ok:
+                applied.append("display %s" % seat)
+            else:
+                notes.append("snapshot display %s refused: %s" % (seat, err))
+    bindings = data.get("bindings")
+    if isinstance(bindings, dict):
+        for seat, binding in bindings.items():
+            if not isinstance(binding, dict):
+                continue
+            profile = binding.get("profile")
+            if not isinstance(profile, str) or not profile.strip():
+                notes.append("snapshot binding %s skipped: no profile." % seat)
+                continue
+            ok, err = set_seat_binding(
+                seat,
+                profile=profile,
+                provided=binding.get("provided"),
+            )
+            if ok:
+                applied.append("binding %s" % seat)
+            else:
+                notes.append("snapshot binding %s refused: %s" % (seat, err))
+    for key in ("business_name", "owner_name"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            INSTALL[key] = val.strip()
+            applied.append(key)
+    return applied, notes
+
+
+def write_roster_snapshot(path):
+    """Write the current roster snapshot to path. Returns True on success.
+
+    Best-effort by design: a failure must never break registration.
+    """
+    try:
+        from pathlib import Path as _Path
+        target = _Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as fh:
+            json.dump(roster_snapshot(), fh, indent=2, sort_keys=True)
+        return True
+    except Exception:
+        return False
+
+
+def read_roster_snapshot(path):
+    """Read a roster snapshot file. Returns the dict, or None if the file
+    is missing, unreadable, or not a JSON object."""
+    try:
+        from pathlib import Path as _Path
+        with open(_Path(path), encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 # --- Capability checklists (v0.4.0, design note SS3) ---
@@ -846,6 +977,16 @@ def make_tool_call(tool_name, arguments, seat="CEO", risk=None, today=None):
             return _fail(tool_name, "Arguments string is not valid JSON.")
     if not isinstance(arguments, dict):
         return _fail(tool_name, "Arguments must be a JSON object")
+
+    if "risk" in arguments:
+        # Ladder v2 L2-7: a risk flag nested inside arguments was silently
+        # ignored by the gate (valid:true, no warning) while the caller
+        # believed it had been evaluated. Risk flags only count as the
+        # top-level `risk` field of the ceo_tool_call envelope.
+        return _fail(tool_name,
+                     "risk belongs as a top-level field of the ceo_tool_call envelope, not inside "
+                     "arguments. Pass risk flags as risk={...} beside arguments; a risk flag nested "
+                     "inside arguments is ignored by the gate, so it is refused.")
 
     leaked = find_secret_paths(arguments)
     if leaked:

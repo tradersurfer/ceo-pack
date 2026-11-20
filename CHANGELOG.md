@@ -20,6 +20,9 @@
 - Cleanup: dead `tools_task_handlers.py` and build scaffolding (`__init_new.py`, `write_init_part1-7.py`, `ceo-pack-audit.patch`) removed.
 - Desktop half v2.2: the live pulse now uses Tailwind `animate-pulse` (the `<style>` keyframes tag was fragile) with a bigger dot and a bold green LIVE label; the active tab is a filled accent tab with bold on-accent text; status pills and seat names are bold; the selected seat card uses on-accent text throughout. Plugin description rewritten as ELI5 for Hermes users (short dev note kept).
 - `/ceo` now analyzes first: the command tells the agent to read the user's question, work out the goal, and say it back in one plain sentence — that derived goal is the first `ceo_brief` call. Before this, the prompt said "use ceo_brief for a goal" with no goal in hand, so the agent stalled instead of running the flow. `ceo_brief`'s goal parameter now says to derive it from the question when the user did not state one exactly.
+- All 29 slash commands are analyze-first now: the 26 one-line pointers ("use {tool}. Input was: ...") each tell the agent to read the user's words and work out that tool's inputs first, asking ONE short question when something required is missing. Every command prompt (and every CEO Pack answer) is ELI5 — plain, simple words a busy entrepreneur or business owner can follow, no jargon, short sentences, what happens next.
+- Session mode: `/ceo` once turns CEO mode on for the whole chat — the flow applies to the user's business messages until they say `/ceo off`. No need to type `/ceo` on every message. `/ceo off` turns it off.
+- New `ceo-pack-usage` skill ships in the plugin: how to use CEO Pack in plain words, the seats-are-roles explainer, and the current known gaps (no `ceo_task_complete` tool, no duplicate tracking in `ceo_assign`, no due date on `ceo_task_create`; NDA risk and "fire the shift lead" routing fixed in v0.5.0).
 
 # Changelog
 

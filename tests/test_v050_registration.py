@@ -29,7 +29,8 @@ EXPECTED_COMMANDS = {
     "ceo delegation",
 }
 EXPECTED_SKILLS = {"ceo-brief", "ceo-decision-log", "ceo-assign",
-                   "q4-closeout", "orchestration", "model-selection"}
+                   "q4-closeout", "orchestration", "model-selection",
+                   "ceo-pack-usage"}
 
 
 class RecordingCtx:

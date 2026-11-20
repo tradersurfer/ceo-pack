@@ -206,6 +206,44 @@
   margin-top: 20px;
 }
 
+/* --- Live states --- */
+/* A seat whose last registry activity is under 2 minutes old. The dot
+   pulses; the node outline holds while it is live. Changed rows flash
+   once for 5s after a poll sees them move, then settle. */
+.ceo-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hermes-diag-ok, #2ecc71);
+  animation: ceo-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ceo-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.ceo-org-node-live {
+  border-color: var(--hermes-diag-ok, #2ecc71);
+}
+
+.ceo-org-activity {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 12px;
+}
+
+.ceo-task-changed,
+.ceo-org-node-changed,
+.ceo-history-new {
+  animation: ceo-flash 5s ease-out;
+}
+
+@keyframes ceo-flash {
+  0% { outline: 2px solid var(--color-ring, #666); outline-offset: 2px; }
+  100% { outline: 2px solid transparent; outline-offset: 2px; }
+}
+
 /* --- Task board --- */
 .ceo-filters {
   display: flex;

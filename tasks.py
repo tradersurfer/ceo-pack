@@ -723,6 +723,28 @@ def get_recent_history(limit: int = 50, db_path: Optional[str] = None) -> list[d
     return [dict(r) for r in rows]
 
 
+def get_seat_last_activity(db_path: Optional[str] = None) -> dict:
+    """Latest registry activity per seat, as ISO timestamps.
+
+    A seat's last activity is the newest of (a) the ``updated_at`` of any
+    task owned by the seat and (b) any task-history event on one of the
+    seat's tasks. Seats with no tasks and no history are absent from the
+    result — the caller shows "unknown", never an invented timestamp.
+    Read-only. Used by the dashboard org chart so the seat that is
+    working can light up; assigned is still not "executing".
+    """
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT t.seat AS seat, MAX(x.at) AS last_activity
+               FROM (SELECT id AS task_id, updated_at AS at FROM tasks
+                     UNION ALL
+                     SELECT task_id, at FROM task_history) x
+               JOIN tasks t ON t.id = x.task_id
+               GROUP BY t.seat"""
+        ).fetchall()
+    return {r["seat"]: r["last_activity"] for r in rows}
+
+
 def get_approval_history(limit: int = 50, db_path: Optional[str] = None) -> list[dict]:
     """History events where a task moved to approved — the approval record.
 

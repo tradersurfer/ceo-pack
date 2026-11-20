@@ -28,6 +28,13 @@ work goes through the chat tools (`ceo_task_create`, `ceo_task_approve`,
 - Errors are visible, not silent: bad input → 400 with a `detail`
   string; unknown task/run → 404; registry unavailable → 503. No
   traceback is ever returned.
+- Live model: the frontend polls every endpoint every 30s; there is no
+  push channel (the plugin API is GET-only by design). "Live" therefore
+  means "within the last poll". A seat whose `last_activity` is under 2
+  minutes old renders a live dot; a task whose status changed, a seat
+  whose activity moved, or a feed line that just arrived flashes once
+  for 5s after the poll that sees it. The first load never flashes —
+  everything is new then.
 
 ## Endpoints
 
@@ -66,8 +73,11 @@ configured avatar **only** when it is an `https://` URL, else `null`),
 `initials` (derived from the display name), `soul` (owner-typed text or
 `null`), `profile` (bound Hermes profile or `null`), `bound`, `binding`
 (`"full"` / `"name-only"` / `"reference"`), `capabilities`,
-`provided`, `missing`, `children: []`, `members: []` (reserved for
-departments / subordinate agents).
+`provided`, `missing`, `last_activity` (ISO timestamp of the seat's
+latest registry activity — newest of the seat's task `updated_at` values
+and history events on its tasks — or `null` when the seat has no recorded
+activity; the UI shows "unknown"), `children: []`, `members: []`
+(reserved for departments / subordinate agents).
 
 ### `GET /tasks` — task board list
 Query params: `status`, `seat`, `run_id` (text filters), `limit`

@@ -160,10 +160,14 @@ def _public_history(event: dict) -> dict:
     }
 
 
-def _seat_node(entry: dict) -> dict:
+def _seat_node(entry: dict, last_activity=None) -> dict:
     """One org-chart node. Children/members exist so departments and
     subordinate agents can plug in later; today every seat node is a leaf
-    except through the head seat's reporting line (see _org_tree)."""
+    except through the head seat's reporting line (see _org_tree).
+
+    ``last_activity`` is the seat's latest registry activity (ISO), or
+    None when the seat has no recorded activity — the UI shows "unknown",
+    never an invented timestamp."""
     avatar = entry.get("avatar")
     avatar_url = avatar if isinstance(avatar, str) and avatar.startswith("https://") else None
     name = entry.get("display_name") or entry.get("seat") or "?"
@@ -182,19 +186,20 @@ def _seat_node(entry: dict) -> dict:
         "capabilities": entry.get("capabilities") or [],
         "provided": entry.get("provided") or [],
         "missing": entry.get("missing") or [],
+        "last_activity": last_activity,
         "children": [],
         "members": [],
     }
 
 
-def _org_tree(roster: dict) -> dict:
+def _org_tree(roster: dict, last_activity: Optional[dict] = None) -> dict:
     """Org tree from the roster. The head seat is the root; the other seats
     report to it under the plugin's accountability model (the head seat
     holds priorities and the decision log; the CEO retains accountability
     for the integrated result). This is the plugin's model, not a claimed
     HR reporting line — departments and custom reporting lines plug into
     ``departments`` and node ``children`` when they exist."""
-    seats = [_seat_node(s) for s in roster.get("seats", [])]
+    seats = [_seat_node(s, (last_activity or {}).get(s.get("seat"))) for s in roster.get("seats", [])]
     head = roster.get("head_seat") or "CEO"
     root = next((n for n in seats if n["seat"] == head), seats[0] if seats else None)
     if root is None:
@@ -246,13 +251,19 @@ def roster():
         raise HTTPException(status_code=503, detail="roster unavailable")
     snapshot_loaded = _seed_roster()
     view = _orch.get_roster_view()
-    nodes = [_seat_node(s) for s in view.get("seats", [])]
+    # Last activity is best-effort: a registry that is unavailable must
+    # never fail the roster — seats show "unknown" instead.
+    try:
+        activity_map = _tasks.get_seat_last_activity() if _tasks else {}
+    except Exception:
+        activity_map = {}
+    nodes = [_seat_node(s, activity_map.get(s.get("seat"))) for s in view.get("seats", [])]
     return {
         "status": "success",
         "generated_at": _now_iso(),
         "head_seat": view.get("head_seat"),
         "seats": nodes,
-        "org": _org_tree(view),
+        "org": _org_tree(view, activity_map),
         "departments": [],
         "snapshot_loaded": snapshot_loaded,
         "display_text_is_untrusted": True,

@@ -482,5 +482,68 @@ class TestRuns(DashboardBase):
         self.assertEqual(len(detail["tasks"]), 2)
 
 
+class TestLastActivity(DashboardBase):
+    """Per-seat last activity (Req 1's genuinely new bit): the org chart
+    shows when each seat last did registry work, derived from the task
+    rows + history — never invented, "unknown" when a seat has none."""
+
+    def _expected_last_activity(self, seat):
+        import sqlite3
+        conn = sqlite3.connect(self.db)
+        row = conn.execute(
+            "SELECT MAX(at) FROM ("
+            "  SELECT updated_at AS at FROM tasks WHERE seat = ?"
+            "  UNION ALL "
+            "  SELECT h.at FROM task_history h"
+            "  JOIN tasks t ON t.id = h.task_id WHERE t.seat = ?)",
+            (seat, seat)).fetchone()
+        conn.close()
+        return row[0]
+
+    def _roster_node(self, seat):
+        roster = _call(api.roster)
+        node = next(s for s in roster["seats"] if s["seat"] == seat)
+        return roster, node
+
+    def test_seat_with_activity_shows_last_activity(self):
+        tid = self.make_task(seat="CFO")
+        self.walk(tid, "approved", "assigned")
+        expected = self._expected_last_activity("CFO")
+        self.assertIsNotNone(expected)
+        roster, node = self._roster_node("CFO")
+        self.assertEqual(node["last_activity"], expected)
+        # The org tree carries the same value — one source, both views.
+        child = next(c for c in roster["org"]["root"]["children"] if c["seat"] == "CFO")
+        self.assertEqual(child["last_activity"], expected)
+
+    def test_seat_without_activity_is_unknown_not_invented(self):
+        roster = _call(api.roster)
+        for node in roster["seats"]:
+            self.assertIsNone(node["last_activity"], node["seat"])
+
+    def test_last_activity_moves_when_task_moves(self):
+        tid = self.make_task(seat="CFO")
+        self.walk(tid, "approved")
+        _roster, first = self._roster_node("CFO")
+        self.walk(tid, "assigned", "running")
+        _roster, second = self._roster_node("CFO")
+        self.assertGreaterEqual(second["last_activity"], first["last_activity"])
+        self.assertEqual(second["last_activity"], self._expected_last_activity("CFO"))
+
+    def test_roster_survives_unavailable_registry(self):
+        import sqlite3
+        self.make_task(seat="CFO")
+        orig = tasks_mod.get_seat_last_activity
+        def _boom(db_path=None):
+            raise sqlite3.OperationalError("registry gone")
+        tasks_mod.get_seat_last_activity = _boom
+        try:
+            roster = _call(api.roster)
+        finally:
+            tasks_mod.get_seat_last_activity = orig
+        for node in roster["seats"]:
+            self.assertIsNone(node["last_activity"], node["seat"])
+
+
 if __name__ == "__main__":
     unittest.main()

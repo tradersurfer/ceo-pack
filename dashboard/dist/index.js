@@ -15,6 +15,12 @@
  * it. Assigned is not "in progress", completed is not "verified". Where a
  * timestamp is missing the UI says "unknown" — it never invents one, and
  * zero counts are shown only as real counts of an empty registry.
+ *
+ * Live window: the tab polls every endpoint every 30s. A seat whose last
+ * registry activity is under 2 minutes old shows a live dot; a task whose
+ * status changed, a seat whose activity moved, or a feed line that just
+ * arrived flashes once between polls. There is no push channel — polling
+ * is the mechanism, and "live" means "within the last poll".
  */
 (function () {
   "use strict";
@@ -48,6 +54,22 @@
   var isoTimeAgo = (SDK.utils && SDK.utils.isoTimeAgo) || function (iso) { return iso || "unknown"; };
 
   var API = "/api/plugins/ceo-pack";
+
+  // Live window: what we last saw, so a seat that just moved, a task whose
+  // status just changed, or a feed line that just arrived can flash once
+  // instead of silently re-rendering. A seat counts as "live" when its
+  // last registry activity is under 2 minutes old. Module-level on
+  // purpose — it must survive re-renders, and the SDK hooks exposed here
+  // do not include a ref hook.
+  var LIVE_WINDOW_MS = 2 * 60 * 1000;
+  var lastSeen = { tasks: {}, seats: {}, history: {} };
+  var lastSeenPrimed = false;
+
+  function isLive(iso) {
+    if (!iso) return false;
+    var t = new Date(iso).getTime();
+    return !isNaN(t) && (Date.now() - t) < LIVE_WINDOW_MS;
+  }
 
   var STATUS_ORDER = ["proposed", "approved", "assigned", "running", "blocked", "completed", "verified", "failed"];
   var STATUS_LABEL = {
@@ -114,7 +136,7 @@
     var t = props.task;
     return h("button", {
       type: "button",
-      className: cn("ceo-task-card", props.selected && "ceo-task-card-selected"),
+      className: cn("ceo-task-card", props.selected && "ceo-task-card-selected", props.changed && "ceo-task-changed"),
       onClick: function () { props.onSelect(t.task_id); },
     },
       h("span", { className: "ceo-task-title" }, t.title || "(untitled task)"),
@@ -198,16 +220,20 @@
   function OrgNode(props) {
     var node = props.node;
     var selected = props.selectedSeat === node.seat;
+    var live = isLive(node.last_activity);
+    var changedSeats = props.changedSeats || {};
     return h("div", { className: "ceo-org-node-wrap" },
       h("button", {
         type: "button",
-        className: cn("ceo-org-node", selected && "ceo-org-node-selected"),
+        className: cn("ceo-org-node", selected && "ceo-org-node-selected", live && "ceo-org-node-live", changedSeats[node.seat] && "ceo-org-node-changed"),
         onClick: function () { props.onSelectSeat(node.seat); },
         title: "Show this seat's assignments",
       },
         h(Avatar, { node: node }),
         h("span", { className: "ceo-org-name" }, node.display_name || node.seat),
         h("span", { className: "ceo-org-seat" }, node.seat),
+        live ? h("span", { className: "ceo-live-dot", title: "Active in the last 2 minutes" }) : null,
+        h("span", { className: "ceo-org-activity" }, "Last active: " + timeOrUnknown(node.last_activity)),
         h("span", { className: "ceo-org-binding" },
           node.bound ? ("Bound: " + (node.profile || "profile")) : "Reference agent"),
         node.missing && node.missing.length
@@ -219,6 +245,7 @@
               return h(OrgNode, {
                 key: child.seat, node: child,
                 selectedSeat: props.selectedSeat, onSelectSeat: props.onSelectSeat,
+                changedSeats: changedSeats,
               });
             }))
         : null);
@@ -243,6 +270,8 @@
     var filterText = _f[0], setFilterText = _f[1];
     var _fs = useState("all");
     var filterStatus = _fs[0], setFilterStatus = _fs[1];
+    var _ch = useState({ tasks: {}, seats: {}, history: {}, at: 0 });
+    var changed = _ch[0], setChanged = _ch[1];
 
     var load = useCallback(function () {
       setLoading(true);
@@ -265,6 +294,44 @@
         results.forEach(function (r) {
           if (r.ok) next[r.k] = r.v; else nextErrors[r.k] = r.err;
         });
+        // Live window: diff this poll against what we last saw, so
+        // just-changed rows flash once. The first load only primes the
+        // snapshot — everything is "new" then, and flashing it all would
+        // be noise.
+        var fresh = { tasks: {}, seats: {}, history: {} };
+        if (lastSeenPrimed) {
+          (next.tasks && next.tasks.tasks || []).forEach(function (t) {
+            var prev = lastSeen.tasks[t.task_id];
+            if (!prev || prev.status !== t.status || prev.updated_at !== t.updated_at) fresh.tasks[t.task_id] = true;
+          });
+          (next.roster && next.roster.seats || []).forEach(function (s) {
+            if (lastSeen.seats[s.seat] !== s.last_activity) fresh.seats[s.seat] = true;
+          });
+          (next.activity && next.activity.recent_history || []).forEach(function (ev) {
+            if (!lastSeen.history[ev.id]) fresh.history[ev.id] = true;
+          });
+        }
+        var seenTasks = {};
+        (next.tasks && next.tasks.tasks || []).forEach(function (t) {
+          seenTasks[t.task_id] = { status: t.status, updated_at: t.updated_at };
+        });
+        var seenSeats = {};
+        (next.roster && next.roster.seats || []).forEach(function (s) {
+          seenSeats[s.seat] = s.last_activity;
+        });
+        var seenHistory = {};
+        (next.activity && next.activity.recent_history || []).forEach(function (ev) {
+          seenHistory[ev.id] = true;
+        });
+        lastSeen = { tasks: seenTasks, seats: seenSeats, history: seenHistory };
+        lastSeenPrimed = true;
+        var stamp = Date.now();
+        setChanged({ tasks: fresh.tasks, seats: fresh.seats, history: fresh.history, at: stamp });
+        setTimeout(function () {
+          setChanged(function (cur) {
+            return cur.at === stamp ? { tasks: {}, seats: {}, history: {}, at: 0 } : cur;
+          });
+        }, 5000);
         setData(function (prev) { return Object.assign({}, prev || {}, next); });
         setErrors(nextErrors);
         setLoading(false);
@@ -350,12 +417,12 @@
           roster.snapshot_loaded
             ? "Roster loaded from the applied install config."
             : "No install config seen yet — showing the default roster."),
-        root ? h(OrgNode, { node: root, selectedSeat: selectedSeat, onSelectSeat: setSelectedSeat }) : null,
+        root ? h(OrgNode, { node: root, selectedSeat: selectedSeat, onSelectSeat: setSelectedSeat, changedSeats: changed.seats }) : null,
         selectedSeat ? h("div", { className: "ceo-seat-tasks" },
           h("h3", null, "Assignments: " + selectedSeat + " (" + seatTasks.length + ")"),
           seatTasks.length
             ? seatTasks.map(function (t) {
-                return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId });
+                return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
               })
             : h(EmptyState, null, "No assignments recorded for this seat yet."),
           h(Button, { onClick: function () { setSelectedSeat(null); } }, "Clear seat filter"))
@@ -370,19 +437,19 @@
         h("h3", null, "Running now (" + (activity.running || []).length + ")"),
         (activity.running || []).length
           ? activity.running.map(function (t) {
-              return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId });
+              return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
             })
           : h(EmptyState, null, "Nothing running right now."),
         h("h3", null, "Blocked / stuck (" + (activity.stuck || []).length + ")"),
         (activity.stuck || []).length
           ? activity.stuck.map(function (t) {
-              return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId });
+              return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
             })
           : h(EmptyState, null, "Nothing blocked or stuck."),
         h("h3", null, "Recent execution history"),
         hist.length
           ? h("ul", { className: "ceo-history" }, hist.map(function (ev) {
-              return h("li", { key: String(ev.id) },
+              return h("li", { key: String(ev.id), className: changed.history[ev.id] ? "ceo-history-new" : undefined },
                 h("span", null, (ev.title || ev.task_id) + ": " + (ev.from_status || "—") + " → " + ev.to_status),
                 h("span", { className: "ceo-history-meta" },
                   " · " + (ev.actor || "system") + " · " + timeOrUnknown(ev.at)),
@@ -431,7 +498,7 @@
               return h("div", { key: s, className: "ceo-status-group" },
                 h("h3", null, STATUS_LABEL[s] + " (" + list.length + ")"),
                 list.map(function (t) {
-                  return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId });
+                  return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
                 }));
             }));
     }
@@ -445,7 +512,7 @@
         h("h3", null, "Pending owner approval (" + approvals.pending_count + ")"),
         pending.length
           ? pending.map(function (t) {
-              return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId });
+              return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
             })
           : h(EmptyState, null, "Nothing waiting on the owner right now."),
         h("h3", null, "Approval history"),

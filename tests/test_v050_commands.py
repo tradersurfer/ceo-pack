@@ -1,10 +1,15 @@
 """v0.5.0 slash-command prompts: analyze-first + ELI5 + session mode.
 
-Every /slash command must tell the agent to read the user's words and
+The 26 one-tool commands tell the agent to read the user's words and
 work out the tool's inputs before calling it — never a bare pointer like
-"CEO Pack: use {tool}. Input was: {raw}". Every prompt answers in plain
-words a business owner can follow. /ceo turns CEO mode on for the
-session; /ceo off turns it off.
+"CEO Pack: use {tool}. Input was: {raw}". Every one of those prompts
+answers in plain words a business owner can follow.
+
+/ceo is different: the host prints a command's return value as the
+visible reply, so /ceo returns SHORT state messages ("CEO ON", "CEO
+OFF") and points the agent at the ceo-pack-usage skill, which carries
+the flow and the ELI5 rules. A long instruction prompt here showed up
+as a wall of text (Adrian, 2026-11-20).
 """
 
 import importlib.util
@@ -130,21 +135,38 @@ class TestCommandPrompts(unittest.TestCase):
 
     def test_ceo_with_input_analyzes_first_and_turns_mode_on(self):
         out = self.ctx.commands["ceo"]["fn"]("how do I set up my business with you?")
-        self.assertIn("ceo_brief", out)
-        self.assertIn("CEO mode is ON for this session", out)
-        self.assertIn("plain, simple words", out)
-        self.assertIn("say the goal back in one plain sentence", out)
+        self.assertIn("CEO ON", out)
+        self.assertIn("say it back in one plain sentence", out)
+        self.assertIn("ceo-pack-usage", out)
+        # Short state reply, not the old wall of prompt text: no tool
+        # names, no ELI5 block, no "never route before the brief" lecture.
+        self.assertNotIn("ceo_brief", out)
+        self.assertNotIn("Never route before the brief", out)
+        self.assertLess(len(out), 300)
+
+    def test_ceo_on_is_a_short_confirmation(self):
+        out = self.ctx.commands["ceo"]["fn"]("on")
+        self.assertIn("CEO ON", out)
+        self.assertIn("'/ceo off'", out)
+        self.assertIn("ceo-pack-usage", out)
+        self.assertNotIn("ceo_brief", out)
+        self.assertNotIn("plain, simple words", out)
+        self.assertLess(len(out), 200)
 
     def test_ceo_empty_turns_mode_on_and_asks_for_a_goal(self):
         out = self.ctx.commands["ceo"]["fn"]("")
-        self.assertIn("CEO mode is ON for this session", out)
-        self.assertIn("Ask the user what", out)
+        self.assertIn("CEO ON", out)
+        self.assertIn("What business goal", out)
+        self.assertIn("ceo-pack-usage", out)
         self.assertNotIn("ceo_brief", out)
+        self.assertLess(len(out), 200)
 
     def test_ceo_off_turns_mode_off(self):
         out = self.ctx.commands["ceo"]["fn"]("off")
-        self.assertIn("CEO mode is OFF", out)
+        self.assertIn("CEO OFF", out)
+        self.assertIn("'/ceo on'", out)
         self.assertNotIn("ceo_brief", out)
+        self.assertLess(len(out), 200)
 
     def test_q4_derives_the_year_and_is_eli5(self):
         out = self.ctx.commands["q4"]["fn"]("close out the year")

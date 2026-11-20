@@ -7,6 +7,7 @@ CEO Pack is your AI C-suite inside Hermes. You talk like a business owner, it tu
 - Say `/ceo` once to turn CEO mode on for the whole chat. It stays on until you say `/ceo off`. You do not need to type `/ceo` on every message.
 - Or type `/ceo` with your question in one go, like `/ceo how do I set up my business with you?` The pack reads your question, works out the goal, and runs the flow.
 - Or open the CEO Pack tab in the dashboard — no command needed, just click and work.
+- When CEO mode is on, the pack reads your words first, works out what you are trying to achieve, and says the goal back in one plain sentence before it runs the flow. If your words have no clear goal yet, it asks ONE short question, then runs it — it never stalls with a bare acknowledgement.
 
 ## The flow, in plain words
 

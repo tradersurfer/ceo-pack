@@ -18,23 +18,12 @@ https URLs on `raw.githubusercontent.com` / `github.com` /
 `*.githubusercontent.com`.
 
 ```
-image: https://raw.githubusercontent.com/tradersurfer/ceo-pack/c1dd341617aa63823b0c1c356a1aa08120ae5926/assets/ceo-pack-cover-v040.webp
+image: https://raw.githubusercontent.com/tradersurfer/ceo-pack/9df6e4f13d37b830da74f2e9ed825bdc1e3f5620/assets/ceo-pack-cover-v040.jpg
 ```
 
-`c1dd3416...` is the HEAD of `v0.5.0-dev` after the v2.2 push (2026-11-19 ~23:2x).
-Re-pin if the branch moves again before filing. Do NOT substitute the v0.4.1
-sha (6331b08a) — the image must resolve at the pinned v0.5.0 commit, and
-`assets/ceo-pack-cover-v040.webp` is in the v0.5.0 tree (447,488 bytes,
-1920x1280, verified present in this repo copy).
+`9df6e4f1...` is the HEAD of `v0.5.0-dev` after the command-fix bundle push (2026-11-20 ~00:48). Re-pin if the branch moves again before filing — the /ceo short-reply fix is built and verified but NOT pushed yet, so the SHA WILL move once more. Do NOT substitute the v0.4.1 sha (6331b08a) — the image must resolve at the pinned v0.5.0 commit.
 
-VERIFIED 2026-11-19 ~23:21: the URL above returns HTTP 200 at that SHA and
-the bytes are JPEG (JFIF, 1920x1280). Chromium `<img>` sniffs image magic
-bytes and renders JPEG regardless of the `.webp` extension, so this URL works
-as the card thumbnail. The `.jpg` rename below is still the cleaner option,
-not a blocker.
-
-URL format verified against the validator's own rule (2026-11-18, Phase 4):
-`_is_allowed_image_url` returns True for this shape with a 40-hex SHA.
+VERIFIED 2026-11-20 ~13:10: the `.jpg` URL above returns HTTP 200, `image/jpeg`, 447,488 bytes at `9df6e4f`. The `.webp` URL 404s at this SHA — Adrian renamed the cover to `.jpg` in commit `581f0b02` (2026-11-19 ~23:33 EST, "Rename cover to .jpg (JPEG bytes)"), so `.webp` no longer exists on the branch. The draft PR (`~/workspace/your_files/ceo-pack-v050-nous-pr-draft.md`) uses the `.jpg` URL. The local README already links the `.jpg` name — that line is now pushable, since the `.jpg` exists on the branch.
 
 ## Entry changes (vs the v0.4.1 entry, PR #157203)
 
@@ -51,26 +40,9 @@ URL format verified against the validator's own rule (2026-11-18, Phase 4):
 - `requires_hermes`: `">=0.22.5"` (already the plugin.yaml value for v0.5.0;
   confirm against the entry — v0.4.1 said `>=0.21.6`).
 
-## Known quirk — flag for Adrian, do not silently rename
+## The rename — DONE (Adrian, 2026-11-19 ~23:33 EST)
 
-`assets/ceo-pack-cover-v040.webp` contains **JPEG bytes** (JFIF,
-1920x1280), not WebP, despite the `.webp` extension. It has lived in the
-repo under this name since v0.4.0 without being referenced by any catalog
-entry, so nothing live breaks today. The `.webp` URL is verified loading
-(200, JPEG bytes, 2026-11-19) and Chromium renders it by sniffing, so the
-catalog PR can file with it as-is. The cleaner option is still renaming it
-to `assets/ceo-pack-cover-v040.jpg` — Adrian's one-liner from his laptop
-clone, then the `image:` line changes extension and the SHA re-pins:
-
-```
-git mv assets/ceo-pack-cover-v040.webp assets/ceo-pack-cover-v040.jpg
-git commit -m "Rename cover to .jpg (JPEG bytes)" && git push origin v0.5.0-dev
-```
-
-Note: the local README already links the `.jpg` name — do NOT push that
-README line until the `.jpg` exists on the branch, or the README image
-breaks. (The binary rename cannot be pushed from the VM — push-files is
-text-only.)
+Adrian ran the one-liner: commit `581f0b02` "Rename cover to .jpg (JPEG bytes)" is on `v0.5.0-dev`. The branch now carries `assets/ceo-pack-cover-v040.jpg` (JPEG bytes, 1920x1280, 447,488 bytes) and NO `.webp` file — the `.webp` URL 404s at the current HEAD. The image: line uses `.jpg` (verified 200 at `9df6e4f`, Nov 20 ~13:10). The local README already links the `.jpg` name, so that line is now pushable.
 
 ## Pre-flight (before filing)
 

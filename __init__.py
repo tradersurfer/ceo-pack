@@ -101,36 +101,31 @@ def _tool_prompt(tool, instruction, raw):
 
 
 def _ceo_command(raw_args):
+    """Short state replies for /ceo — the host prints the command's return
+    value as the visible reply, so a long instruction prompt shows up as a
+    wall of text. The flow itself lives in the ceo-pack-usage skill; the
+    command only flips the mode and points the agent at the skill."""
     raw = (raw_args or "").strip()
     if raw.lower() == "off":
         return (
-            "CEO Pack: CEO mode is OFF for this session. Answer normally "
-            "from now on and do not run the CEO Pack flow unless the user "
-            "invokes /ceo again. "
-            f"{_ELI5}"
+            "CEO OFF. Back to normal chat. "
+            "Use '/ceo on' to turn CEO mode back on."
+        )
+    if raw.lower() == "on":
+        return (
+            "CEO ON. Use '/ceo off' to turn it off. "
+            "Follow the ceo-pack-usage skill for this session."
         )
     if not raw:
         return (
-            "CEO Pack: CEO mode is ON for this session. Ask the user what "
-            "business goal to work on first, in plain words. From now on, "
-            "apply the brief, route, assign, verify, and log flow to their "
-            "business messages until they say /ceo off. "
-            f"{_ELI5}"
+            "CEO ON. Follow the ceo-pack-usage skill. "
+            "What business goal should we work on first? "
+            "Use '/ceo off' to turn it off."
         )
     return (
-        "CEO Pack: CEO mode is ON for this session. First read the user's "
-        "question below and work out what they are actually trying to "
-        "achieve — say the goal back in one plain sentence. That goal is "
-        "the first tool call: ceo_brief with the goal you just found, not "
-        "a goal handed to you. Only then ceo_route to pick a seat, "
-        "ceo_assign for one owner + one due date, and ceo_decision_log to "
-        "record the decision. Never route before the brief has a goal. If "
-        "the question has no clear goal yet, ask ONE short question to pin "
-        "it down, then run the flow — do not stall with a bare "
-        "acknowledgement. Keep CEO mode on for the rest of this session: "
-        "apply this flow to the user's business messages until they say "
-        "/ceo off. External actions need owner approval. "
-        f"{_ELI5} "
+        "CEO ON for this session. Read the user's words below, work out "
+        "the goal, say it back in one plain sentence, then follow the "
+        "ceo-pack-usage skill. Use '/ceo off' to turn it off. "
         f"Input was: {raw_args}"
     )
 

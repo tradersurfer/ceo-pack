@@ -1,5 +1,5 @@
 /**
- * CEO Pack — Hermes Desktop half (v2: native).
+ * CEO Pack — Hermes Desktop half (v2.1: native + color/interactive polish).
  *
  * Plain ESM runtime plugin, loaded uncompiled by the Desktop app. No build
  * step, no Hermes repo changes. The Desktop app's sidebar does NOT read the
@@ -89,6 +89,26 @@ function statusLabel(s) {
   return s === 'blocked' || s === 'failed' ? 'Blocked / failed' : s.charAt(0).toUpperCase() + s.slice(1)
 }
 
+const STATUS_COLORS = {
+  proposed: 'var(--ui-accent)',
+  approved: 'var(--ui-success)',
+  assigned: 'var(--ui-accent-secondary)',
+  running: 'var(--ui-accent)',
+  completed: 'var(--ui-success)',
+  verified: 'var(--ui-success)',
+  blocked: 'var(--ui-danger)',
+  failed: 'var(--ui-danger)',
+  rejected: 'var(--ui-text-tertiary)'
+}
+
+function StatusPill({ status }) {
+  const color = STATUS_COLORS[status] || 'var(--ui-text-secondary)'
+  return jsx('span', {
+    style: { border: `1px solid ${color}`, color, padding: '1px 8px', fontSize: '0.8rem', whiteSpace: 'nowrap' },
+    children: statusLabel(status)
+  })
+}
+
 function useCeoData() {
   const summary = useQuery({ queryKey: [...QUERY_ROOT, 'summary'], queryFn: () => api('/summary'), refetchInterval: POLL_MS })
   const roster = useQuery({ queryKey: [...QUERY_ROOT, 'roster'], queryFn: () => api('/roster'), refetchInterval: POLL_MS })
@@ -99,11 +119,11 @@ function useCeoData() {
   return { summary, roster, tasks, activity, approvals, runs }
 }
 
-function StatBox({ value, label }) {
+function StatBox({ value, label, color }) {
   return jsxs('div', {
     style: { border: '1px solid var(--ui-stroke-secondary)', padding: '12px 16px', minWidth: '110px' },
     children: [
-      jsx('div', { style: { fontSize: '1.5rem', fontWeight: 600 }, children: String(value) }),
+      jsx('div', { style: { fontSize: '1.5rem', fontWeight: 600, color: color || 'var(--ui-text-primary)' }, children: String(value) }),
       jsx('div', { style: { color: 'var(--ui-text-secondary)', fontSize: '0.85rem' }, children: label })
     ]
   })
@@ -116,10 +136,10 @@ function SummaryStrip({ summary }) {
     style: { display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' },
     children: [
       jsx(StatBox, { value: summary.tasks_total ?? 0, label: 'Tasks' }),
-      jsx(StatBox, { value: summary.running ?? 0, label: 'Running' }),
-      jsx(StatBox, { value: summary.stuck ?? 0, label: 'Blocked / failed' }),
-      jsx(StatBox, { value: summary.pending_approvals ?? 0, label: 'Pending approval' }),
-      jsx(StatBox, { value: byStatus.verified ?? 0, label: 'Verified' }),
+      jsx(StatBox, { value: summary.running ?? 0, label: 'Running', color: (summary.running ?? 0) > 0 ? 'var(--ui-accent)' : undefined }),
+      jsx(StatBox, { value: summary.stuck ?? 0, label: 'Blocked / failed', color: (summary.stuck ?? 0) > 0 ? 'var(--ui-danger)' : undefined }),
+      jsx(StatBox, { value: summary.pending_approvals ?? 0, label: 'Pending approval', color: (summary.pending_approvals ?? 0) > 0 ? 'var(--ui-accent)' : undefined }),
+      jsx(StatBox, { value: byStatus.verified ?? 0, label: 'Verified', color: (byStatus.verified ?? 0) > 0 ? 'var(--ui-success)' : undefined }),
       jsx(StatBox, { value: summary.total_runs ?? 0, label: 'Runs' })
     ]
   })
@@ -179,6 +199,7 @@ function CeoPackPage() {
   return jsxs('div', {
     style: { padding: '20px 24px', height: '100%', overflowY: 'auto' },
     children: [
+      jsx('style', { children: '@keyframes ceoPulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }' }),
       jsx('h1', { style: { fontSize: '1.4rem', margin: '0 0 4px' }, children: 'CEO Pack — Executive Workspace' }),
       jsx('p', { style: { color: 'var(--ui-text-secondary)', margin: '0 0 16px' }, children: 'Your AI C-suite at a glance. Every number below is a live read of the task registry — nothing is invented.' }),
       jsx(SummaryStrip, { summary: data.summary.data }),
@@ -236,8 +257,9 @@ function SeatCard({ node, selected, onSelect }) {
           jsx('span', {
             style: {
               width: '10px', height: '10px', borderRadius: '50%',
-              background: live ? 'var(--ui-accent)' : 'var(--ui-stroke-secondary)',
-              display: 'inline-block'
+              background: live ? 'var(--ui-success)' : 'var(--ui-stroke-secondary)',
+              display: 'inline-block',
+              animation: live ? 'ceoPulse 1.6s ease-in-out infinite' : undefined
             },
             children: ''
           }),
@@ -335,10 +357,10 @@ function TaskRow({ task }) {
     children: [
       jsx('div', { style: { fontWeight: 600 }, children: task.title }),
       jsxs('div', {
-        style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: 'var(--ui-text-secondary)' },
+        style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: 'var(--ui-text-secondary)', alignItems: 'center' },
         children: [
-          jsx('span', { children: statusLabel(task.status) }),
-          task.approval_required ? jsx('span', { children: 'TYPE 1' }) : null,
+          jsx(StatusPill, { status: task.status }),
+          task.approval_required ? jsx('span', { style: { color: 'var(--ui-danger)' }, children: 'TYPE 1' }) : null,
           jsx('span', { children: `${task.seat} · updated ${relTime(task.updated_at)}` })
         ]
       })
@@ -348,20 +370,34 @@ function TaskRow({ task }) {
 
 function TaskCard({ task, writes, busy }) {
   const [assignee, setAssignee] = useState(task.seat || '')
+  const [open, setOpen] = useState(false)
   const canApprove = task.status === 'proposed' && task.approval_required
   const canAssign = task.status === 'approved' || task.status === 'proposed'
+  const exec = task.execution || null
   return jsxs('div', {
     style: { border: '1px solid var(--ui-stroke-secondary)', padding: '10px 12px' },
     children: [
-      jsx('div', { style: { fontWeight: 600 }, children: task.title }),
+      jsx('div', {
+        onClick: () => setOpen(!open),
+        style: { fontWeight: 600, cursor: 'pointer' },
+        children: `${open ? '▾' : '▸'} ${task.title}`
+      }),
       jsxs('div', {
-        style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: 'var(--ui-text-secondary)' },
+        style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: 'var(--ui-text-secondary)', alignItems: 'center' },
         children: [
-          jsx('span', { children: statusLabel(task.status) }),
-          task.approval_required ? jsx('span', { children: 'TYPE 1' }) : null,
+          jsx(StatusPill, { status: task.status }),
+          task.approval_required ? jsx('span', { style: { color: 'var(--ui-danger)' }, children: 'TYPE 1' }) : null,
           jsx('span', { children: `${task.seat} · updated ${relTime(task.updated_at)}` })
         ]
       }),
+      open ? jsxs('div', {
+        style: { marginTop: '8px', fontSize: '0.85rem', color: 'var(--ui-text-secondary)', display: 'flex', flexDirection: 'column', gap: '2px' },
+        children: [
+          task.description ? jsx('div', { children: task.description }) : null,
+          jsx('div', { children: `Created ${relTime(task.created_at)}${task.due_date ? ` · due ${task.due_date}` : ''}${task.approved_by ? ` · approved by ${task.approved_by}` : ''}` }),
+          exec ? jsx('div', { children: `Run: ${exec.status || '—'}${exec.cost_usd != null ? ` · $${exec.cost_usd}` : ''}${exec.cost_status === 'unknown' ? ' · cost unknown' : ''}${exec.duration_seconds != null ? ` · ${exec.duration_seconds}s` : ''}` }) : null
+        ]
+      }) : null,
       jsxs('div', {
         style: { display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' },
         children: [
@@ -405,11 +441,20 @@ function TaskBoard({ tasks, roster, runs, writes, busy }) {
   const [seat, setSeat] = useState('')
   const [run, setRun] = useState('')
   const [type1, setType1] = useState(false)
+  const [seatFilter, setSeatFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [search, setSearch] = useState('')
   const list = (tasks && tasks.tasks) || []
   const seats = (roster && roster.seats) || []
   const runList = (runs && runs.runs) || (runs && runs.items) || []
+  const filtered = list.filter((t) => {
+    if (seatFilter && t.seat !== seatFilter) return false
+    if (statusFilter && t.status !== statusFilter) return false
+    if (search && !(t.title || '').toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  })
   const groups = {}
-  for (const t of list) {
+  for (const t of filtered) {
     const g = groups[t.status] || (groups[t.status] = [])
     g.push(t)
   }
@@ -465,6 +510,36 @@ function TaskBoard({ tasks, roster, runs, writes, busy }) {
             style: { padding: '6px 14px', border: '1px solid var(--ui-accent)', background: 'transparent', color: 'var(--ui-accent)', cursor: 'pointer' },
             children: 'Create task'
           })
+        ]
+      }),
+      jsxs('div', {
+        style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' },
+        children: [
+          jsx('select', {
+            value: seatFilter,
+            onChange: (e) => setSeatFilter(e.target.value),
+            style: { padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' },
+            children: [
+              jsx('option', { value: '', key: 'all-seats', children: 'All seats' }),
+              ...seats.map((s) => jsx('option', { value: s.seat, key: s.seat, children: s.seat }))
+            ]
+          }),
+          jsx('select', {
+            value: statusFilter,
+            onChange: (e) => setStatusFilter(e.target.value),
+            style: { padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' },
+            children: [
+              jsx('option', { value: '', key: 'all-status', children: 'All statuses' }),
+              ...STATUS_ORDER.map((s) => jsx('option', { value: s, key: s, children: statusLabel(s) }))
+            ]
+          }),
+          jsx('input', {
+            value: search,
+            onChange: (e) => setSearch(e.target.value),
+            placeholder: 'Search tasks…',
+            style: { flex: '1 1 160px', padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' }
+          }),
+          filtered.length !== list.length ? jsx('span', { style: { alignSelf: 'center', color: 'var(--ui-text-secondary)', fontSize: '0.85rem' }, children: `Showing ${filtered.length} of ${list.length}` }) : null
         ]
       }),
       STATUS_ORDER.map((status) => {

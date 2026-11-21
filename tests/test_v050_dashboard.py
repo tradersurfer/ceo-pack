@@ -729,5 +729,132 @@ class TestDashboardWrites(DashboardBase):
         self.assertEqual(code, 503)
 
 
+class TestRedesignContract(DashboardBase):
+    """Chat's Nov 20 visual redesign: the reskin reads exactly these
+    fields. Pin the contract so a backend change that drops one breaks
+    here, not silently in the UI. No new data was assumed — every field
+    below already existed in v0.5.0."""
+
+    def _seed_board(self):
+        run_id = self.make_run()
+        t1 = self.make_task(run_id, title="Draft launch email", approval_required=True)
+        t2 = self.make_task(run_id, title="Reconcile books")
+        self.walk(t2, "approved")
+        t3 = self.make_task(run_id, title="Update pricing")
+        self.walk(t3, "approved", "assigned")
+        t4 = self.make_task(run_id, title="Market analysis")
+        self.walk(t4, "approved", "assigned", "running")
+        t5 = self.make_task(run_id, title="Review contracts")
+        self.walk(t5, "approved", "assigned", "running", "completed")
+        t6 = self.make_task(run_id, title="Prepare Q4 report")
+        self.walk(t6, "approved", "assigned", "running", "completed", "verified")
+        return [t1, t2, t3, t4, t5, t6]
+
+    def test_summary_carries_all_six_kpi_fields(self):
+        self._seed_board()
+        s = _call(api.summary)
+        for key in ("tasks_total", "running", "stuck", "pending_approvals",
+                    "total_runs", "generated_at", "tasks_by_status"):
+            self.assertIn(key, s, "KPI strip reads %s" % key)
+        self.assertEqual(s["tasks_total"], 6)
+        self.assertEqual(s["running"], 1)
+        self.assertEqual(s["stuck"], 0)
+        self.assertEqual(s["pending_approvals"], 1)
+        self.assertEqual(s["total_runs"], 1)
+        self.assertEqual(s["tasks_by_status"]["verified"], 1)
+
+    def test_roster_seats_carry_display_last_activity_and_gaps(self):
+        self._seed_board()
+        roster = _call(api.roster)
+        self.assertEqual(len(roster["seats"]), 8)
+        for seat in roster["seats"]:
+            for key in ("seat", "display_name", "initials", "last_activity",
+                        "missing", "bound", "profile"):
+                self.assertIn(key, seat, "seat card reads %s" % key)
+            self.assertIsInstance(seat["missing"], list)
+        cfo = next(s for s in roster["seats"] if s["seat"] == "CFO")
+        self.assertIsNotNone(cfo["last_activity"])
+        cro = next(s for s in roster["seats"] if s["seat"] == "CRO")
+        self.assertIsNone(cro["last_activity"], "no activity invents none")
+
+    def test_activity_history_rows_carry_everything_the_timeline_renders(self):
+        self._seed_board()
+        act = _call(api.activity)
+        self.assertEqual(len(act["running"]), 1)
+        self.assertEqual(act["running"][0]["status"], "running")
+        self.assertEqual(act["stuck"], [])
+        self.assertTrue(act["recent_history"])
+        for ev in act["recent_history"]:
+            for key in ("id", "from_status", "to_status", "actor", "at"):
+                self.assertIn(key, ev, "timeline row reads %s" % key)
+            self.assertTrue(ev["title"] or ev.get("task_id"))
+
+    def test_approvals_carry_pending_history_and_note(self):
+        self._seed_board()
+        resp = _call(api.approvals)
+        self.assertEqual(resp["pending_count"], 1)
+        row = resp["pending"][0]
+        for key in ("task_id", "title", "seat", "status",
+                    "approval_required", "updated_at"):
+            self.assertIn(key, row, "approval card reads %s" % key)
+        self.assertTrue(row["approval_required"])
+        tasks_mod.approve_task(row["task_id"], "Owner", db_path=self.db)
+        resp = _call(api.approvals)
+        self.assertEqual(resp["pending_count"], 0)
+        self.assertEqual(resp["history"][0]["actor"], "Owner")
+        self.assertIn("not stored", resp["decisions_note"])
+
+    def test_board_chip_counts_derive_from_tasks(self):
+        # The UI's chips are All / Proposed / Approved / In Progress /
+        # Done; In Progress is assigned + running, Done is completed +
+        # verified. The counts must come from the returned task list.
+        self._seed_board()
+        tasks = _call(api.list_tasks)["tasks"]
+        by_status = {}
+        for t in tasks:
+            by_status[t["status"]] = by_status.get(t["status"], 0) + 1
+        chips = {
+            "all": sum(by_status.values()),
+            "proposed": by_status.get("proposed", 0),
+            "approved": by_status.get("approved", 0),
+            "in-progress": by_status.get("assigned", 0) + by_status.get("running", 0),
+            "done": by_status.get("completed", 0) + by_status.get("verified", 0),
+        }
+        self.assertEqual(chips, {
+            "all": 6, "proposed": 1, "approved": 1,
+            "in-progress": 2, "done": 2,
+        })
+
+    def test_no_business_health_or_trend_fields(self):
+        # The redesign shows no productivity / efficiency / on-time /
+        # compliance scores, no trend deltas, no financial figures. The
+        # backend must not start emitting them either.
+        self._seed_board()
+        banned = {
+            "productivity", "efficiency", "on_time", "on-time",
+            "compliance", "trend", "delta", "revenue", "profit",
+            "business_health", "health_score",
+        }
+
+        def _keys(obj):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    yield k
+                    yield from _keys(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    yield from _keys(v)
+
+        payloads = [
+            _call(api.summary),
+            _call(api.list_tasks),
+            _call(api.activity),
+            _call(api.approvals),
+        ]
+        for payload in payloads:
+            found = banned & set(_keys(payload))
+            self.assertEqual(found, set(), "fabricated metric keys: %s" % found)
+
+
 if __name__ == "__main__":
     unittest.main()

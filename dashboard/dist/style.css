@@ -1,13 +1,21 @@
 /*
  * CEO Pack — Executive Workspace dashboard styles.
  *
- * All colors reference the host theme CSS vars (with fallbacks) so the tab
- * reskins with the active dashboard theme. No hardcoded palette.
+ * Visual system (Chat's v0.5.0 redesign spec, Nov 20, 2026): futuristic
+ * executive command center — dark navy surfaces, gold CEO accent, teal
+ * operational accent. All colors reference the host theme CSS vars (with
+ * fallbacks) so the tab reskins with the active dashboard theme. No
+ * hardcoded palette: gold is --color-warning, teal is --color-accent,
+ * green is --color-success, red is --color-destructive.
+ *
+ * Data rules: every number is a live read of the task registry. Nothing
+ * is invented — no trend deltas, no Business Health panel, no fabricated
+ * activity. Unknown timestamps render "unknown".
  */
 
 .ceo-pack {
   width: 100%;
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: 16px 20px 40px;
   color: var(--color-foreground, #e5e5e5);
@@ -15,6 +23,7 @@
   line-height: 1.45;
 }
 
+/* --- Header --- */
 .ceo-header {
   display: flex;
   justify-content: space-between;
@@ -24,9 +33,28 @@
   margin-bottom: 12px;
 }
 
+.ceo-header-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.ceo-crown {
+  font-size: 30px;
+  line-height: 1;
+  color: var(--color-warning, #d4a017);
+}
+
 .ceo-header h1 {
   font-size: 22px;
-  margin: 0 0 4px;
+  margin: 0;
+  color: var(--color-warning, #d4a017);
+}
+
+.ceo-title-sub {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 2px 0 4px;
 }
 
 .ceo-subtitle {
@@ -47,26 +75,59 @@
   white-space: nowrap;
 }
 
+/* --- Summary strip: six KPI cards, numbers only, no deltas --- */
 .ceo-stats {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
-  flex-wrap: wrap;
   margin: 12px 0 16px;
 }
 
+@media (max-width: 900px) {
+  .ceo-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .ceo-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .ceo-stat {
-  min-width: 110px;
-  padding: 10px 14px;
+  min-width: 0;
+  padding: 12px 14px;
   border: 1px solid var(--color-border, #333);
   border-radius: var(--radius, 8px);
   background: var(--color-card, transparent);
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  border-top: 2px solid var(--color-border, #333);
 }
 
+.ceo-stat-gold { border-top-color: var(--color-warning, #d4a017); }
+.ceo-stat-teal { border-top-color: var(--color-accent, #2aa198); }
+.ceo-stat-green { border-top-color: var(--color-success, #2ecc71); }
+.ceo-stat-amber { border-top-color: var(--color-warning, #d4a017); }
+.ceo-stat-red { border-top-color: var(--color-destructive, #c0392b); }
+
+.ceo-stat-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ceo-stat-gold .ceo-stat-icon { color: var(--color-warning, #d4a017); }
+.ceo-stat-teal .ceo-stat-icon { color: var(--color-accent, #2aa198); }
+.ceo-stat-green .ceo-stat-icon { color: var(--color-success, #2ecc71); }
+.ceo-stat-amber .ceo-stat-icon { color: var(--color-warning, #d4a017); }
+.ceo-stat-red .ceo-stat-icon { color: var(--color-destructive, #c0392b); }
+
 .ceo-stat-value {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
+  line-height: 1.1;
 }
 
 .ceo-stat-label {
@@ -74,6 +135,7 @@
   font-size: 12px;
 }
 
+/* --- Tabs: segmented, gold active --- */
 .ceo-tabs {
   display: flex;
   gap: 8px;
@@ -88,7 +150,8 @@
 .ceo-tab-active {
   opacity: 1;
   font-weight: 700;
-  border-color: var(--color-ring, #666) !important;
+  background: color-mix(in srgb, var(--color-warning, #d4a017) 18%, transparent) !important;
+  border-color: var(--color-warning, #d4a017) !important;
 }
 
 .ceo-panel h3 {
@@ -117,9 +180,9 @@
 
 .ceo-error {
   padding: 12px 14px;
-  border: 1px solid var(--hermes-diag-error, #c0392b);
+  border: 1px solid var(--color-destructive, #c0392b);
   border-radius: var(--radius, 8px);
-  background: color-mix(in srgb, var(--hermes-diag-error, #c0392b) 12%, transparent);
+  background: color-mix(in srgb, var(--color-destructive, #c0392b) 12%, transparent);
   margin: 8px 0;
 }
 
@@ -127,7 +190,25 @@
   margin-left: 12px;
 }
 
+:focus-visible {
+  outline: 2px solid var(--color-ring, #666);
+  outline-offset: 2px;
+}
+
 /* --- Org chart --- */
+.ceo-org-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .ceo-org-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .ceo-org-node-wrap {
   display: flex;
   flex-direction: column;
@@ -152,7 +233,13 @@
 
 .ceo-org-node:hover,
 .ceo-org-node-selected {
-  border-color: var(--color-ring, #666);
+  border-color: var(--color-warning, #d4a017);
+}
+
+.ceo-org-connector {
+  width: 1px;
+  height: 16px;
+  background: var(--color-border, #333);
 }
 
 .ceo-org-children {
@@ -160,7 +247,6 @@
   gap: 12px;
   flex-wrap: wrap;
   justify-content: center;
-  margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--color-border, #333);
 }
@@ -198,6 +284,18 @@
   background: var(--color-border, #333);
 }
 
+.ceo-avatar-img-sm {
+  width: 28px;
+  height: 28px;
+}
+
+.ceo-avatar-initials-sm {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+  flex: none;
+}
+
 .ceo-missing {
   margin-top: 4px;
 }
@@ -206,15 +304,71 @@
   margin-top: 20px;
 }
 
+/* Live Agent Activity side panel (org tab): real roster activity only —
+   seat name, seat, last-active time, live dot. No invented "working on"
+   lines. */
+.ceo-live-panel {
+  border: 1px solid var(--color-border, #333);
+  border-radius: var(--radius, 8px);
+  background: var(--color-card, transparent);
+  padding: 12px 14px;
+}
+
+.ceo-live-panel h3 {
+  margin: 0 0 10px;
+}
+
+.ceo-live-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border, #333);
+}
+
+.ceo-live-row:last-child {
+  border-bottom: none;
+}
+
+.ceo-live-row-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.ceo-live-row-name {
+  font-weight: 600;
+}
+
+.ceo-live-row-meta {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 12px;
+}
+
 /* --- Write actions --- */
-.ceo-approval-row {
-  margin: 6px 0;
+.ceo-approval-card {
+  border: 1px solid var(--color-border, #333);
+  border-radius: var(--radius, 8px);
+  background: var(--color-card, transparent);
+  padding: 12px 14px;
+  margin: 8px 0;
 }
 
 .ceo-approval-actions {
   display: flex;
   gap: 8px;
-  margin: 4px 0 10px;
+  margin: 8px 0 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ceo-approve {
+  border-color: var(--color-warning, #d4a017) !important;
+  background: color-mix(in srgb, var(--color-warning, #d4a017) 18%, transparent) !important;
+  font-weight: 700;
+}
+
+.ceo-reject {
+  border-color: var(--color-destructive, #c0392b) !important;
 }
 
 .ceo-detail-assign {
@@ -225,12 +379,24 @@
   flex-wrap: wrap;
 }
 
+.ceo-create-panel {
+  border: 1px solid var(--color-border, #333);
+  border-radius: var(--radius, 8px);
+  background: var(--color-card, transparent);
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+
+.ceo-create-panel h3 {
+  margin: 0 0 10px;
+}
+
 .ceo-create-form {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-  margin: 12px 0;
+  margin: 0;
 }
 
 .ceo-type1-check {
@@ -249,8 +415,16 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--hermes-diag-ok, #2ecc71);
+  background: var(--color-success, #2ecc71);
   animation: ceo-pulse 1.6s ease-in-out infinite;
+  flex: none;
+}
+
+.ceo-live-label {
+  color: var(--color-success, #2ecc71);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 
 @keyframes ceo-pulse {
@@ -259,7 +433,7 @@
 }
 
 .ceo-org-node-live {
-  border-color: var(--hermes-diag-ok, #2ecc71);
+  border-color: var(--color-success, #2ecc71);
 }
 
 .ceo-org-activity {
@@ -278,6 +452,15 @@
   100% { outline: 2px solid transparent; outline-offset: 2px; }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .ceo-live-dot,
+  .ceo-task-changed,
+  .ceo-org-node-changed,
+  .ceo-history-new {
+    animation: none;
+  }
+}
+
 /* --- Task board --- */
 .ceo-filters {
   display: flex;
@@ -285,6 +468,29 @@
   align-items: center;
   flex-wrap: wrap;
   margin: 12px 0;
+}
+
+.ceo-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ceo-chip {
+  opacity: 0.75;
+}
+
+.ceo-chip-count {
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.ceo-chip-active {
+  opacity: 1;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--color-warning, #d4a017) 18%, transparent) !important;
+  border-color: var(--color-warning, #d4a017) !important;
 }
 
 .ceo-select,
@@ -295,10 +501,6 @@
   border-radius: var(--radius, 8px);
   padding: 6px 8px;
   font-size: 14px;
-}
-
-.ceo-status-group {
-  margin-bottom: 8px;
 }
 
 .ceo-task-card {
@@ -319,7 +521,7 @@
 
 .ceo-task-card:hover,
 .ceo-task-card-selected {
-  border-color: var(--color-ring, #666);
+  border-color: var(--color-warning, #d4a017);
 }
 
 .ceo-task-title {
@@ -339,22 +541,115 @@
   font-size: 12px;
 }
 
+/* Status pills: color never carries status alone — the label text is
+   always present. */
 .ceo-status {
   text-transform: capitalize;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ceo-status-proposed {
+  border: 1px solid var(--color-border, #333);
+  color: var(--color-muted-foreground, #9a9a9a);
+}
+
+.ceo-status-approved {
+  border: 1px solid var(--color-warning, #d4a017);
+  color: var(--color-warning, #d4a017);
+  background: color-mix(in srgb, var(--color-warning, #d4a017) 12%, transparent);
+}
+
+.ceo-status-assigned {
+  border: 1px solid var(--color-accent, #2aa198);
+  color: var(--color-accent, #2aa198);
 }
 
 .ceo-status-running {
+  border: 1px solid var(--color-success, #2ecc71);
+  color: var(--color-success, #2ecc71);
   font-weight: 700;
 }
 
-.ceo-status-blocked,
-.ceo-status-failed {
-  border-color: var(--hermes-diag-error, #c0392b) !important;
+.ceo-status-blocked {
+  border: 1px solid var(--color-warning, #d4a017);
+  color: var(--color-warning, #d4a017);
 }
 
-.ceo-overdue,
+.ceo-status-failed {
+  border: 1px solid var(--color-destructive, #c0392b);
+  color: var(--color-destructive, #c0392b);
+}
+
+.ceo-status-completed {
+  border: 1px solid var(--color-success, #2ecc71);
+  color: var(--color-success, #2ecc71);
+  opacity: 0.75;
+}
+
+.ceo-status-verified {
+  border: 1px solid var(--color-success, #2ecc71);
+  color: var(--color-success, #2ecc71);
+  background: color-mix(in srgb, var(--color-success, #2ecc71) 12%, transparent);
+  font-weight: 700;
+}
+
+.ceo-status-rejected {
+  border: 1px solid var(--color-border, #333);
+  color: var(--color-muted-foreground, #9a9a9a);
+}
+
+.ceo-overdue {
+  border-color: var(--color-destructive, #c0392b) !important;
+}
+
 .ceo-type1 {
-  border-color: var(--hermes-diag-warning, #d4a017) !important;
+  border: 1px solid var(--color-warning, #d4a017) !important;
+  color: var(--color-warning, #d4a017);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ceo-pending-badge {
+  border: 1px solid var(--color-warning, #d4a017);
+  color: var(--color-warning, #d4a017);
+  background: color-mix(in srgb, var(--color-warning, #d4a017) 12%, transparent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* --- Activity panels --- */
+.ceo-activity-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+@media (max-width: 700px) {
+  .ceo-activity-panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ceo-activity-panel {
+  border: 1px solid var(--color-border, #333);
+  border-radius: var(--radius, 8px);
+  background: var(--color-card, transparent);
+  padding: 12px 14px;
+}
+
+.ceo-activity-panel h3 {
+  margin: 0 0 8px;
 }
 
 /* --- Task detail --- */
@@ -383,13 +678,26 @@
 
 .ceo-history {
   list-style: none;
-  padding: 0;
+  padding: 0 0 0 16px;
   margin: 0;
+  border-left: 1px solid var(--color-border, #333);
 }
 
 .ceo-history li {
+  position: relative;
   padding: 6px 0;
   border-bottom: 1px solid var(--color-border, #333);
+}
+
+.ceo-history li::before {
+  content: "";
+  position: absolute;
+  left: -20px;
+  top: 13px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent, #2aa198);
 }
 
 .ceo-history-meta {

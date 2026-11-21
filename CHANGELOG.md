@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — dashboard visual redesign (Chat's spec, Nov 20, 2026)
+- Reskin of both dashboard surfaces to the futuristic command-center look — crown header, six KPI cards with icons, gold active tabs, org chart with a Live Agent Activity side panel (web), activity panels, board filter chips (All / Proposed / Approved / In Progress / Done, counts from the real task list), approvals with amber PENDING badges and an Assign control. Same API contract, same writes, same 30s polling; presentation only.
+- No fabricated data: no trend deltas on the KPI cards, no Business Health panel, no invented activity lines — the activity feed shows registry events only, and the org side panel shows seat name / seat / real last-active time / live dot only. Live dots still come only from real `last_activity` inside the 2-minute window; the header shows no LIVE badge for polling alone.
+- Desktop parity: change flash now works on Desktop too (module-level snapshot, rows that move between polls flash once for 5s); seat cards show the real avatar or initials; Type 1 markers and Approve are gold, Reject is destructive.
+- Tests: 6 new `TestRedesignContract` tests pin the fields the redesigned UI reads (summary KPI keys, roster seat fields, activity history rows, approval rows, chip-count derivation) plus a guard that no business-health / trend / financial keys appear in the dashboard payloads. Suite 323 total, all passing.
+- Note: version not bumped — this ships as the next release on Adrian's call (v0.6.0 per Chat's sequence, or a v0.5.1 reskin — his pick).
+
 ## 0.5.0 — CEO Executive Workspace
 - NEW dashboard tab (`/ceo-pack`, after Kanban): org chart, live agent activity, task board, and approval center, served by `dashboard/plugin_api.py` (9 read-only GET routes). Every number traces to a registry/roster read; empty states show "No tasks yet", never fabricated activity. Org chart is a generic tree (departments / subordinate agents plug in later, not hardcoded to 8 seats). Task board is read-only — no write routes, so nothing bypasses the tools.
 - Persistent task registry with enforced lifecycle: proposed -> approved -> assigned -> running -> blocked/completed -> verified (failed -> running is the retry path). Illegal transitions are refused, `task_key` is idempotent per run, UUID task/run IDs, execution history, dependencies, retry/recovery.

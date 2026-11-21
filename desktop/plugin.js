@@ -1,6 +1,8 @@
 /**
- * CEO Pack — Hermes Desktop half (v2.2: native + color/interactive polish,
- * robust live pulse via Tailwind animate-pulse, bold filled tabs).
+ * CEO Pack — Hermes Desktop half (v2.3: Chat's visual redesign, Nov 20 —
+ * command-center look on the same API contract: crown header, KPI icons,
+ * avatar seat cards, activity panels, board filter chips, PENDING badges,
+ * change flash on Desktop, gold Type 1 / Approve treatment).
  *
  * Plain ESM runtime plugin, loaded uncompiled by the Desktop app. No build
  * step, no Hermes repo changes. The Desktop app's sidebar does NOT read the
@@ -33,13 +35,18 @@
  */
 
 import { host, PALETTE_AREA, queryClient, ROUTES_AREA, SIDEBAR_NAV_AREA, useQuery } from '@hermes/plugin-sdk'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'ceo-pack'
 const POLL_MS = 30000
 const LIVE_WINDOW_MS = 2 * 60 * 1000
 const QUERY_ROOT = ['ceo-pack']
+
+// Change flash (web parity): module-level snapshot of what we last saw,
+// so rows that move between 30s polls flash once. First load only primes.
+const lastSeen = { tasks: {}, history: {} }
+let lastSeenPrimed = false
 
 // Bound in register() from ctx.rest (namespace-scoped to /api/plugins/ceo-pack).
 let rest = null
@@ -84,20 +91,22 @@ const TAB_LABELS = [
   ['approvals', 'Approvals']
 ]
 
-const STATUS_ORDER = ['proposed', 'approved', 'assigned', 'running', 'completed', 'verified', 'blocked', 'failed', 'rejected']
-
 function statusLabel(s) {
   return s === 'blocked' || s === 'failed' ? 'Blocked / failed' : s.charAt(0).toUpperCase() + s.slice(1)
 }
 
+// Status pill colors (spec §6): proposed muted, approved gold, assigned
+// teal, running green, blocked amber, failed red, completed muted
+// success, verified success, rejected muted. The label text is always
+// present — color never carries status alone.
 const STATUS_COLORS = {
-  proposed: 'var(--ui-accent)',
-  approved: 'var(--ui-success)',
+  proposed: 'var(--ui-text-secondary)',
+  approved: 'var(--ui-yellow)',
   assigned: 'var(--ui-accent-secondary)',
-  running: 'var(--ui-accent)',
+  running: 'var(--ui-success)',
   completed: 'var(--ui-success)',
   verified: 'var(--ui-success)',
-  blocked: 'var(--ui-danger)',
+  blocked: 'var(--ui-yellow)',
   failed: 'var(--ui-danger)',
   rejected: 'var(--ui-text-tertiary)'
 }
@@ -120,11 +129,12 @@ function useCeoData() {
   return { summary, roster, tasks, activity, approvals, runs }
 }
 
-function StatBox({ value, label, color }) {
+function StatBox({ value, label, color, icon }) {
   return jsxs('div', {
-    style: { border: '1px solid var(--ui-stroke-secondary)', padding: '12px 16px', minWidth: '110px' },
+    style: { border: '1px solid var(--ui-stroke-secondary)', borderTop: `2px solid ${color || 'var(--ui-stroke-secondary)'}`, padding: '12px 16px', minWidth: '110px' },
     children: [
-      jsx('div', { style: { fontSize: '1.5rem', fontWeight: 600, color: color || 'var(--ui-text-primary)' }, children: String(value) }),
+      icon ? jsx('div', { style: { fontSize: '1rem', color: color || 'var(--ui-text-secondary)' }, children: icon }) : null,
+      jsx('div', { style: { fontSize: '1.5rem', fontWeight: 700, color: 'var(--ui-text-primary)' }, children: String(value) }),
       jsx('div', { style: { color: 'var(--ui-text-secondary)', fontSize: '0.85rem' }, children: label })
     ]
   })
@@ -136,12 +146,12 @@ function SummaryStrip({ summary }) {
   return jsxs('div', {
     style: { display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' },
     children: [
-      jsx(StatBox, { value: summary.tasks_total ?? 0, label: 'Tasks' }),
-      jsx(StatBox, { value: summary.running ?? 0, label: 'Running', color: (summary.running ?? 0) > 0 ? 'var(--ui-accent)' : undefined }),
-      jsx(StatBox, { value: summary.stuck ?? 0, label: 'Blocked / failed', color: (summary.stuck ?? 0) > 0 ? 'var(--ui-danger)' : undefined }),
-      jsx(StatBox, { value: summary.pending_approvals ?? 0, label: 'Pending approval', color: (summary.pending_approvals ?? 0) > 0 ? 'var(--ui-accent)' : undefined }),
-      jsx(StatBox, { value: byStatus.verified ?? 0, label: 'Verified', color: (byStatus.verified ?? 0) > 0 ? 'var(--ui-success)' : undefined }),
-      jsx(StatBox, { value: summary.total_runs ?? 0, label: 'Runs' })
+      jsx(StatBox, { value: summary.tasks_total ?? 0, label: 'Tasks', color: 'var(--ui-yellow)', icon: '▤' }),
+      jsx(StatBox, { value: summary.running ?? 0, label: 'Running', color: 'var(--ui-accent)', icon: '▶' }),
+      jsx(StatBox, { value: summary.stuck ?? 0, label: 'Blocked / failed', color: 'var(--ui-danger)', icon: '⚠' }),
+      jsx(StatBox, { value: summary.pending_approvals ?? 0, label: 'Pending approval', color: 'var(--ui-yellow)', icon: '◷' }),
+      jsx(StatBox, { value: byStatus.verified ?? 0, label: 'Verified', color: 'var(--ui-success)', icon: '✓' }),
+      jsx(StatBox, { value: summary.total_runs ?? 0, label: 'Runs', color: 'var(--ui-accent)', icon: '▸' })
     ]
   })
 }
@@ -168,9 +178,38 @@ function CeoPackPage() {
   const [selectedSeat, setSelectedSeat] = useState(null)
   const [writeBusy, setWriteBusy] = useState(false)
   const [writeError, setWriteError] = useState('')
+  const [changed, setChanged] = useState({ tasks: {}, history: {} })
   const data = useCeoData()
   const loading = data.summary.isLoading || data.roster.isLoading
   const loadError = data.summary.error || data.roster.error || data.tasks.error || data.approvals.error
+
+  // Change flash (web parity): diff each poll against the module-level
+  // snapshot; just-changed rows flash once for 5s. First load primes.
+  useEffect(() => {
+    const tasksData = data.tasks.data
+    const activityData = data.activity.data
+    if (!tasksData && !activityData) return undefined
+    const fresh = { tasks: {}, history: {} }
+    if (lastSeenPrimed) {
+      ;(tasksData?.tasks || []).forEach((t) => {
+        const prev = lastSeen.tasks[taskId(t)]
+        if (!prev || prev.status !== t.status || prev.updated_at !== t.updated_at) fresh.tasks[taskId(t)] = true
+      })
+      ;(activityData?.recent_history || []).forEach((ev) => {
+        if (!lastSeen.history[ev.id]) fresh.history[ev.id] = true
+      })
+    }
+    const seenTasks = {}
+    ;(tasksData?.tasks || []).forEach((t) => { seenTasks[taskId(t)] = { status: t.status, updated_at: t.updated_at } })
+    const seenHistory = {}
+    ;(activityData?.recent_history || []).forEach((ev) => { seenHistory[ev.id] = true })
+    lastSeen.tasks = seenTasks
+    lastSeen.history = seenHistory
+    lastSeenPrimed = true
+    setChanged(fresh)
+    const timer = setTimeout(() => setChanged({ tasks: {}, history: {} }), 5000)
+    return () => clearTimeout(timer)
+  }, [data.tasks.data, data.activity.data])
 
   async function write(path, opts) {
     setWriteBusy(true)
@@ -198,11 +237,40 @@ function CeoPackPage() {
     return jsx('div', { style: { padding: '24px' }, children: 'Loading CEO Pack…' })
   }
 
+  const generatedAt = data.summary.data?.generated_at
+  const updatedText = generatedAt ? `Updated ${relTime(generatedAt)}` : ''
   return jsxs('div', {
     style: { padding: '20px 24px', height: '100%', overflowY: 'auto' },
     children: [
-      jsx('h1', { style: { fontSize: '1.4rem', margin: '0 0 4px' }, children: 'CEO Pack — Executive Workspace' }),
-      jsx('p', { style: { color: 'var(--ui-text-secondary)', margin: '0 0 16px' }, children: 'Your AI C-suite at a glance. Every number below is a live read of the task registry — nothing is invented.' }),
+      jsxs('div', {
+        style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap', marginBottom: '12px' },
+        children: [
+          jsxs('div', {
+            style: { display: 'flex', gap: '12px', alignItems: 'flex-start' },
+            children: [
+              jsx('span', { style: { fontSize: '30px', lineHeight: 1, color: 'var(--ui-yellow)' }, children: '♛' }),
+              jsxs('div', {
+                children: [
+                  jsx('h1', { style: { fontSize: '1.4rem', margin: 0, color: 'var(--ui-yellow)' }, children: 'CEO Pack' }),
+                  jsx('div', { style: { fontSize: '1rem', fontWeight: 600 }, children: 'Executive Workspace' }),
+                  jsx('p', { style: { color: 'var(--ui-text-secondary)', margin: '4px 0 0' }, children: 'Your AI C-suite at a glance. Every number below is a live read of the task registry — nothing is invented.' })
+                ]
+              })
+            ]
+          }),
+          jsxs('div', {
+            style: { display: 'flex', alignItems: 'center', gap: '12px' },
+            children: [
+              jsx('button', {
+                type: 'button', disabled: writeBusy, onClick: () => { refreshAll() },
+                style: { padding: '6px 14px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', cursor: 'pointer' },
+                children: 'Refresh'
+              }),
+              updatedText ? jsx('span', { style: { color: 'var(--ui-text-secondary)', fontSize: '0.85rem', whiteSpace: 'nowrap' }, children: updatedText }) : null
+            ]
+          })
+        ]
+      }),
       jsx(SummaryStrip, { summary: data.summary.data }),
       loadError ? jsx('div', {
         style: { border: '1px solid var(--ui-stroke-secondary)', padding: '12px', marginBottom: '12px' },
@@ -216,24 +284,19 @@ function CeoPackPage() {
         style: { display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' },
         children: TAB_LABELS.map(([id, label]) => jsx(TabButton, { id, label, active: tab === id, onSelect: setTab, key: id }))
       }),
-      tab === 'org' ? jsx(OrgChart, { roster: data.roster.data, tasks: data.tasks.data, selectedSeat, onSelectSeat: setSelectedSeat }) : null,
-      tab === 'activity' ? jsx(ActivityPanel, { activity: data.activity.data }) : null,
-      tab === 'board' ? jsx(TaskBoard, { tasks: data.tasks.data, roster: data.roster.data, runs: data.runs.data, writes, busy: writeBusy }) : null,
-      tab === 'approvals' ? jsx(ApprovalsPanel, { approvals: data.approvals.data, writes, busy: writeBusy }) : null,
-      jsxs('div', {
-        style: { marginTop: '16px' },
-        children: [
-          jsx('button', {
-            type: 'button',
-            disabled: writeBusy,
-            onClick: () => { refreshAll() },
-            style: { padding: '6px 14px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', cursor: 'pointer' },
-            children: 'Refresh'
-          })
-        ]
-      })
+      tab === 'org' ? jsx(OrgChart, { roster: data.roster.data, tasks: data.tasks.data, selectedSeat, onSelectSeat: setSelectedSeat, changed }) : null,
+      tab === 'activity' ? jsx(ActivityPanel, { activity: data.activity.data, changed }) : null,
+      tab === 'board' ? jsx(TaskBoard, { tasks: data.tasks.data, roster: data.roster.data, runs: data.runs.data, writes, busy: writeBusy, changed }) : null,
+      tab === 'approvals' ? jsx(ApprovalsPanel, { approvals: data.approvals.data, writes, busy: writeBusy, changed }) : null
     ]
   })
+}
+
+function SeatAvatar({ node }) {
+  if (node.avatar_url) {
+    return jsx('img', { src: node.avatar_url, alt: node.display_name || node.seat, style: { width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', margin: '0 auto 6px', display: 'block' } })
+  }
+  return jsx('span', { style: { width: '44px', height: '44px', borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '16px', background: 'var(--ui-stroke-secondary)', margin: '0 auto 6px' }, children: node.initials || '?' })
 }
 
 function SeatCard({ node, selected, onSelect }) {
@@ -254,6 +317,7 @@ function SeatCard({ node, selected, onSelect }) {
       textAlign: 'center'
     },
     children: [
+      jsx(SeatAvatar, { node }),
       jsxs('div', {
         style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' },
         children: [
@@ -278,7 +342,7 @@ function SeatCard({ node, selected, onSelect }) {
   })
 }
 
-function OrgChart({ roster, tasks, selectedSeat, onSelectSeat }) {
+function OrgChart({ roster, tasks, selectedSeat, onSelectSeat, changed }) {
   if (!roster) return jsx('div', { children: 'No roster yet.' })
   const seats = roster.seats || []
   const head = seats.find((s) => s.seat === roster.head_seat) || seats[0]
@@ -290,6 +354,7 @@ function OrgChart({ roster, tasks, selectedSeat, onSelectSeat }) {
     children: [
       jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'Reporting shown by the plugin’s accountability model — the head seat holds priorities. Departments and custom reporting lines plug in here when they exist; none are shown until they do. Roster loaded from the applied install config.' }),
       head ? jsx('div', { style: { display: 'flex', justifyContent: 'center', marginBottom: '12px' }, children: jsx(SeatCard, { node: head, selected: selectedSeat === head.seat, onSelect: onSelectSeat }) }) : null,
+      restSeats.length ? jsx('div', { style: { width: '1px', height: '16px', background: 'var(--ui-stroke-secondary)', margin: '0 auto 12px' }, children: '' }) : null,
       jsxs('div', {
         style: { display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' },
         children: restSeats.map((s) => jsx(SeatCard, { node: s, selected: selectedSeat === s.seat, onSelect: onSelectSeat, key: s.seat }))
@@ -313,7 +378,7 @@ function OrgChart({ roster, tasks, selectedSeat, onSelectSeat }) {
             ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'No tasks for this seat yet.' })
             : jsx('div', {
               style: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' },
-              children: seatTasks.map((t) => jsx(TaskRow, { task: t, key: taskId(t) }))
+              children: seatTasks.map((t) => jsx(TaskRow, { task: t, key: taskId(t), changed: changed?.tasks?.[taskId(t)] }))
             })
         ]
       }) : null
@@ -321,33 +386,52 @@ function OrgChart({ roster, tasks, selectedSeat, onSelectSeat }) {
   })
 }
 
-function ActivityPanel({ activity }) {
+function ActivityPanel({ activity, changed }) {
   if (!activity) return jsx('div', { children: 'No activity yet.' })
   const history = activity.recent_history || []
   return jsxs('div', {
     children: [
-      jsx('h3', { children: `Running now (${(activity.running || []).length})` }),
-      (activity.running || []).length === 0
-        ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'Nothing running right now.' })
-        : jsx('div', {
-          style: { display: 'flex', flexDirection: 'column', gap: '8px' },
-          children: (activity.running || []).map((t) => jsx(TaskRow, { task: t, key: taskId(t) }))
-        }),
-      jsx('h3', { children: `Blocked / stuck (${(activity.stuck || []).length})` }),
-      (activity.stuck || []).length === 0
-        ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'Nothing blocked or stuck.' })
-        : jsx('div', {
-          style: { display: 'flex', flexDirection: 'column', gap: '8px' },
-          children: (activity.stuck || []).map((t) => jsx(TaskRow, { task: t, key: taskId(t) }))
-        }),
+      jsxs('div', {
+        style: { display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' },
+        children: [
+          jsxs('div', {
+            style: { border: '1px solid var(--ui-stroke-secondary)', padding: '12px 14px', flex: '1 1 220px' },
+            children: [
+              jsx('h3', { style: { margin: '0 0 8px' }, children: `Running now (${(activity.running || []).length})` }),
+              (activity.running || []).length === 0
+                ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'Nothing running right now.' })
+                : jsx('div', {
+                  style: { display: 'flex', flexDirection: 'column', gap: '8px' },
+                  children: (activity.running || []).map((t) => jsx(TaskRow, { task: t, key: taskId(t), changed: changed?.tasks?.[taskId(t)] }))
+                })
+            ]
+          }),
+          jsxs('div', {
+            style: { border: '1px solid var(--ui-stroke-secondary)', padding: '12px 14px', flex: '1 1 220px' },
+            children: [
+              jsx('h3', { style: { margin: '0 0 8px' }, children: `Blocked / stuck (${(activity.stuck || []).length})` }),
+              (activity.stuck || []).length === 0
+                ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'Nothing blocked or stuck.' })
+                : jsx('div', {
+                  style: { display: 'flex', flexDirection: 'column', gap: '8px' },
+                  children: (activity.stuck || []).map((t) => jsx(TaskRow, { task: t, key: taskId(t), changed: changed?.tasks?.[taskId(t)] }))
+                })
+            ]
+          })
+        ]
+      }),
       jsx('h3', { children: 'Recent execution history' }),
       history.length === 0
         ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'No history yet.' })
         : jsx('div', {
-          style: { display: 'flex', flexDirection: 'column', gap: '4px' },
+          style: { display: 'flex', flexDirection: 'column', gap: '4px', borderLeft: '1px solid var(--ui-stroke-secondary)', paddingLeft: '16px' },
           children: history.map((h, i) => jsx('div', {
             key: i,
-            style: { borderBottom: '1px solid var(--ui-stroke-secondary)', padding: '6px 0' },
+            style: {
+              borderBottom: '1px solid var(--ui-stroke-secondary)', padding: '6px 0',
+              borderColor: changed?.history?.[h.id] ? 'var(--ui-accent)' : undefined,
+              background: changed?.history?.[h.id] ? 'var(--ui-bg-elevated)' : undefined
+            },
             children: `${h.title || h.task_title || 'Task'}: ${h.from_status || '—'} → ${h.to_status || '—'} · ${h.actor || 'system'} · ${relTime(h.at)}${h.note ? ` — ${h.note}` : ''}`
           }))
         })
@@ -355,16 +439,21 @@ function ActivityPanel({ activity }) {
   })
 }
 
-function TaskRow({ task }) {
+function TaskRow({ task, changed }) {
   return jsxs('div', {
-    style: { border: '1px solid var(--ui-stroke-secondary)', padding: '10px 12px' },
+    style: {
+      border: '1px solid var(--ui-stroke-secondary)',
+      borderColor: changed ? 'var(--ui-accent)' : undefined,
+      background: changed ? 'var(--ui-bg-elevated)' : undefined,
+      padding: '10px 12px'
+    },
     children: [
       jsx('div', { style: { fontWeight: 600 }, children: task.title }),
       jsxs('div', {
         style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: 'var(--ui-text-secondary)', alignItems: 'center' },
         children: [
           jsx(StatusPill, { status: task.status }),
-          task.approval_required ? jsx('span', { style: { color: 'var(--ui-danger)' }, children: 'TYPE 1' }) : null,
+          task.approval_required ? jsx('span', { style: { color: 'var(--ui-yellow)' }, children: 'TYPE 1' }) : null,
           jsx('span', { children: `${task.seat} · updated ${relTime(task.updated_at)}` })
         ]
       })
@@ -372,15 +461,21 @@ function TaskRow({ task }) {
   })
 }
 
-function TaskCard({ task, writes, busy }) {
+function TaskCard({ task, writes, busy, changed, showPending }) {
   const [assignee, setAssignee] = useState(task.seat || '')
   const [open, setOpen] = useState(false)
   const canApprove = task.status === 'proposed' && task.approval_required
   const canAssign = task.status === 'approved' || task.status === 'proposed'
   const exec = task.execution || null
   return jsxs('div', {
-    style: { border: '1px solid var(--ui-stroke-secondary)', padding: '10px 12px' },
+    style: {
+      border: '1px solid var(--ui-stroke-secondary)',
+      borderColor: changed ? 'var(--ui-accent)' : undefined,
+      background: changed ? 'var(--ui-bg-elevated)' : undefined,
+      padding: '10px 12px'
+    },
     children: [
+      showPending ? jsx('span', { style: { border: '1px solid var(--ui-yellow)', color: 'var(--ui-yellow)', padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', borderRadius: '999px' }, children: 'PENDING' }) : null,
       jsx('div', {
         onClick: () => setOpen(!open),
         style: { fontWeight: 600, cursor: 'pointer' },
@@ -390,7 +485,7 @@ function TaskCard({ task, writes, busy }) {
         style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: 'var(--ui-text-secondary)', alignItems: 'center' },
         children: [
           jsx(StatusPill, { status: task.status }),
-          task.approval_required ? jsx('span', { style: { color: 'var(--ui-danger)' }, children: 'TYPE 1' }) : null,
+          task.approval_required ? jsx('span', { style: { color: 'var(--ui-yellow)' }, children: 'TYPE 1' }) : null,
           jsx('span', { children: `${task.seat} · updated ${relTime(task.updated_at)}` })
         ]
       }),
@@ -408,13 +503,13 @@ function TaskCard({ task, writes, busy }) {
           canApprove ? jsx('button', {
             type: 'button', disabled: busy,
             onClick: () => writes.approve(taskId(task)),
-            style: { padding: '4px 12px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', cursor: 'pointer' },
+            style: { padding: '4px 12px', border: '1px solid var(--ui-yellow)', background: 'transparent', color: 'var(--ui-yellow)', fontWeight: 700, cursor: 'pointer' },
             children: 'Approve'
           }) : null,
           canApprove ? jsx('button', {
             type: 'button', disabled: busy,
             onClick: () => writes.reject(taskId(task)),
-            style: { padding: '4px 12px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', cursor: 'pointer' },
+            style: { padding: '4px 12px', border: '1px solid var(--ui-danger)', background: 'transparent', color: 'var(--ui-danger)', cursor: 'pointer' },
             children: 'Reject'
           }) : null,
           canAssign ? jsxs('span', {
@@ -440,28 +535,46 @@ function TaskCard({ task, writes, busy }) {
   })
 }
 
-function TaskBoard({ tasks, roster, runs, writes, busy }) {
+function TaskBoard({ tasks, roster, runs, writes, busy, changed }) {
   const [title, setTitle] = useState('')
   const [seat, setSeat] = useState('')
   const [run, setRun] = useState('')
   const [type1, setType1] = useState(false)
   const [seatFilter, setSeatFilter] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
   const list = (tasks && tasks.tasks) || []
   const seats = (roster && roster.seats) || []
   const runList = (runs && runs.runs) || (runs && runs.items) || []
+  // Board chips map to real lifecycle states: In Progress covers assigned
+  // + running; Done covers completed + verified. Blocked, failed, and
+  // rejected tasks show under All only.
+  const BOARD_FILTERS = {
+    all: null,
+    proposed: ['proposed'],
+    approved: ['approved'],
+    'in-progress': ['assigned', 'running'],
+    done: ['completed', 'verified']
+  }
+  const CHIPS = [
+    ['all', 'All'],
+    ['proposed', 'Proposed'],
+    ['approved', 'Approved'],
+    ['in-progress', 'In Progress'],
+    ['done', 'Done']
+  ]
+  const chipCount = (key) => {
+    const allowed = BOARD_FILTERS[key]
+    if (!allowed) return list.length
+    return list.filter((t) => allowed.includes(t.status)).length
+  }
   const filtered = list.filter((t) => {
     if (seatFilter && t.seat !== seatFilter) return false
-    if (statusFilter && t.status !== statusFilter) return false
+    const allowed = BOARD_FILTERS[statusFilter]
+    if (allowed && !allowed.includes(t.status)) return false
     if (search && !(t.title || '').toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
-  const groups = {}
-  for (const t of filtered) {
-    const g = groups[t.status] || (groups[t.status] = [])
-    g.push(t)
-  }
   const canCreate = title.trim() && seat && run
 
   async function create() {
@@ -476,49 +589,71 @@ function TaskBoard({ tasks, roster, runs, writes, busy }) {
   return jsxs('div', {
     children: [
       jsxs('div', {
-        style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' },
+        style: { border: '1px solid var(--ui-stroke-secondary)', padding: '12px 14px', marginBottom: '16px' },
         children: [
-          jsx('input', {
-            value: title,
-            onChange: (e) => setTitle(e.target.value),
-            placeholder: 'New task title…',
-            style: { flex: '1 1 220px', padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' }
-          }),
-          jsx('select', {
-            value: seat,
-            onChange: (e) => setSeat(e.target.value),
-            style: { padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' },
+          jsx('h3', { style: { margin: '0 0 10px' }, children: 'Create New Task' }),
+          jsxs('div', {
+            style: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
             children: [
-              jsx('option', { value: '', key: 'none', children: 'Seat…' }),
-              ...seats.map((s) => jsx('option', { value: s.seat, key: s.seat, children: `${s.display_name || s.seat} (${s.seat})` }))
+              jsx('input', {
+                value: title,
+                onChange: (e) => setTitle(e.target.value),
+                placeholder: 'New task title…',
+                style: { flex: '1 1 220px', padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' }
+              }),
+              jsx('select', {
+                value: seat,
+                onChange: (e) => setSeat(e.target.value),
+                style: { padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' },
+                children: [
+                  jsx('option', { value: '', key: 'none', children: 'Seat…' }),
+                  ...seats.map((s) => jsx('option', { value: s.seat, key: s.seat, children: `${s.display_name || s.seat} (${s.seat})` }))
+                ]
+              }),
+              jsx('select', {
+                value: run,
+                onChange: (e) => setRun(e.target.value),
+                style: { padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' },
+                children: [
+                  jsx('option', { value: '', key: 'none', children: 'Run…' }),
+                  ...runList.map((r) => jsx('option', { value: runId(r), key: runId(r), children: runId(r) }))
+                ]
+              }),
+              jsx('label', {
+                style: { display: 'inline-flex', gap: '6px', alignItems: 'center', cursor: 'pointer' },
+                children: [
+                  jsx('input', { type: 'checkbox', checked: type1, onChange: (e) => setType1(e.target.checked) }),
+                  jsx('span', { children: 'Type 1 (needs owner approval)' })
+                ]
+              }),
+              jsx('button', {
+                type: 'button', disabled: busy || !canCreate, onClick: create,
+                style: { padding: '6px 14px', border: '1px solid var(--ui-yellow)', background: 'transparent', color: 'var(--ui-yellow)', fontWeight: 700, cursor: 'pointer' },
+                children: 'Create task'
+              })
             ]
-          }),
-          jsx('select', {
-            value: run,
-            onChange: (e) => setRun(e.target.value),
-            style: { padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' },
-            children: [
-              jsx('option', { value: '', key: 'none', children: 'Run…' }),
-              ...runList.map((r) => jsx('option', { value: runId(r), key: runId(r), children: runId(r) }))
-            ]
-          }),
-          jsx('label', {
-            style: { display: 'inline-flex', gap: '6px', alignItems: 'center', cursor: 'pointer' },
-            children: [
-              jsx('input', { type: 'checkbox', checked: type1, onChange: (e) => setType1(e.target.checked) }),
-              jsx('span', { children: 'Type 1 (needs owner approval)' })
-            ]
-          }),
-          jsx('button', {
-            type: 'button', disabled: busy || !canCreate, onClick: create,
-            style: { padding: '6px 14px', border: '1px solid var(--ui-accent)', background: 'transparent', color: 'var(--ui-accent)', cursor: 'pointer' },
-            children: 'Create task'
           })
         ]
       }),
       jsxs('div', {
-        style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' },
+        style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px', alignItems: 'center' },
         children: [
+          jsxs('div', {
+            style: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
+            children: CHIPS.map(([id, label]) => jsx('button', {
+              type: 'button', key: id,
+              onClick: () => setStatusFilter(id),
+              style: {
+                padding: '6px 12px',
+                border: `1px solid ${statusFilter === id ? 'var(--ui-yellow)' : 'var(--ui-stroke-secondary)'}`,
+                background: statusFilter === id ? 'var(--ui-bg-elevated)' : 'transparent',
+                color: 'var(--ui-text-primary)',
+                fontWeight: statusFilter === id ? 700 : 600,
+                cursor: 'pointer'
+              },
+              children: `${label} (${chipCount(id)})`
+            }))
+          }),
           jsx('select', {
             value: seatFilter,
             onChange: (e) => setSeatFilter(e.target.value),
@@ -526,15 +661,6 @@ function TaskBoard({ tasks, roster, runs, writes, busy }) {
             children: [
               jsx('option', { value: '', key: 'all-seats', children: 'All seats' }),
               ...seats.map((s) => jsx('option', { value: s.seat, key: s.seat, children: s.seat }))
-            ]
-          }),
-          jsx('select', {
-            value: statusFilter,
-            onChange: (e) => setStatusFilter(e.target.value),
-            style: { padding: '6px 10px', border: '1px solid var(--ui-stroke-secondary)', background: 'transparent', color: 'var(--ui-text-primary)' },
-            children: [
-              jsx('option', { value: '', key: 'all-status', children: 'All statuses' }),
-              ...STATUS_ORDER.map((s) => jsx('option', { value: s, key: s, children: statusLabel(s) }))
             ]
           }),
           jsx('input', {
@@ -546,26 +672,19 @@ function TaskBoard({ tasks, roster, runs, writes, busy }) {
           filtered.length !== list.length ? jsx('span', { style: { alignSelf: 'center', color: 'var(--ui-text-secondary)', fontSize: '0.85rem' }, children: `Showing ${filtered.length} of ${list.length}` }) : null
         ]
       }),
-      STATUS_ORDER.map((status) => {
-        const group = groups[status] || []
-        if (group.length === 0) return null
-        return jsxs('div', {
-          key: status,
-          style: { marginBottom: '16px' },
-          children: [
-            jsx('h3', { children: `${statusLabel(status)} (${group.length})` }),
-            jsx('div', {
-              style: { display: 'flex', flexDirection: 'column', gap: '8px' },
-              children: group.map((t) => jsx(TaskCard, { task: t, writes, busy, key: taskId(t) }))
-            })
-          ]
-        })
-      })
+      list.length === 0
+        ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'No tasks in the registry yet.' })
+        : filtered.length === 0
+          ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'No tasks in this view.' })
+          : jsx('div', {
+            style: { display: 'flex', flexDirection: 'column', gap: '8px' },
+            children: filtered.map((t) => jsx(TaskCard, { task: t, writes, busy, key: taskId(t), changed: changed?.tasks?.[taskId(t)] }))
+          })
     ]
   })
 }
 
-function ApprovalsPanel({ approvals, writes, busy }) {
+function ApprovalsPanel({ approvals, writes, busy, changed }) {
   if (!approvals) return jsx('div', { children: 'No approvals yet.' })
   const pending = approvals.pending || []
   const history = approvals.history || []
@@ -573,14 +692,14 @@ function ApprovalsPanel({ approvals, writes, busy }) {
     children: [
       jsx('h3', { children: `Pending owner approval (${approvals.pending_count ?? pending.length})` }),
       pending.length === 0
-        ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'Nothing waiting on the owner.' })
+        ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'No pending owner approvals.' })
         : jsx('div', {
           style: { display: 'flex', flexDirection: 'column', gap: '8px' },
-          children: pending.map((t) => jsx(TaskCard, { task: t, writes, busy, key: taskId(t) }))
+          children: pending.map((t) => jsx(TaskCard, { task: t, writes, busy, key: taskId(t), changed: changed?.tasks?.[taskId(t)], showPending: true }))
         }),
       jsx('h3', { children: 'Approval history' }),
       history.length === 0
-        ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'No approvals granted yet.' })
+        ? jsx('p', { style: { color: 'var(--ui-text-secondary)' }, children: 'No approval history yet.' })
         : jsx('div', {
           style: { display: 'flex', flexDirection: 'column', gap: '4px' },
           children: history.map((h, i) => jsx('div', {

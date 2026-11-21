@@ -1,6 +1,13 @@
 /**
  * CEO Pack — Executive Workspace dashboard.
  *
+ * Visual redesign (Chat's spec, Nov 20, 2026): futuristic command center —
+ * crown header, six KPI cards with icons, org chart with a Live Agent
+ * Activity side panel, activity panels, board filter chips, approvals
+ * with PENDING badges. Same API contract, same writes, same live window;
+ * presentation only. No fabricated data: no deltas, no Business Health
+ * panel, no invented activity lines.
+ *
  * Plain IIFE, no build step. Uses window.__HERMES_PLUGIN_SDK__ for React +
  * host components and SDK.fetchJSON for API calls (host auth handling);
  * registers via window.__HERMES_PLUGINS__.register("ceo-pack", ...).
@@ -86,8 +93,7 @@
     return !isNaN(t) && (Date.now() - t) < LIVE_WINDOW_MS;
   }
 
-  var STATUS_ORDER = ["proposed", "approved", "assigned", "running", "blocked", "completed", "verified", "failed", "rejected"];
-  var STATUS_LABEL = {
+const STATUS_LABEL = {
     proposed: "Proposed", approved: "Approved", assigned: "Assigned",
     running: "Running", blocked: "Blocked", completed: "Completed",
     verified: "Verified", failed: "Failed", rejected: "Rejected",
@@ -124,11 +130,12 @@
     var node = props.node;
     if (node.avatar_url) {
       return h("img", {
-        className: "ceo-avatar-img", src: node.avatar_url,
+        className: "ceo-avatar-img" + (props.small ? " ceo-avatar-img-sm" : ""),
+        src: node.avatar_url,
         alt: node.display_name || node.seat,
       });
     }
-    return h("span", { className: "ceo-avatar-initials" }, node.initials || "?");
+    return h("span", { className: "ceo-avatar-initials" + (props.small ? " ceo-avatar-initials-sm" : "") }, node.initials || "?");
   }
 
   function StatusBadge(props) {
@@ -323,6 +330,7 @@
         h("span", { className: "ceo-org-name" }, node.display_name || node.seat),
         h("span", { className: "ceo-org-seat" }, node.seat),
         live ? h("span", { className: "ceo-live-dot", title: "Active in the last 2 minutes" }) : null,
+        live ? h("span", { className: "ceo-live-label" }, "LIVE") : null,
         h("span", { className: "ceo-org-activity" }, "Last active: " + timeOrUnknown(node.last_activity)),
         h("span", { className: "ceo-org-binding" },
           node.bound ? ("Bound: " + (node.profile || "profile")) : "Reference agent"),
@@ -330,15 +338,60 @@
           ? h(Badge, { className: "ceo-missing" }, node.missing.length + " capability gap" + (node.missing.length === 1 ? "" : "s"))
           : null),
       node.children && node.children.length
-        ? h("div", { className: "ceo-org-children" },
-            node.children.map(function (child) {
-              return h(OrgNode, {
-                key: child.seat, node: child,
-                selectedSeat: props.selectedSeat, onSelectSeat: props.onSelectSeat,
-                changedSeats: changedSeats,
-              });
-            }))
+        ? h("div", null,
+            h("div", { className: "ceo-org-connector" }),
+            h("div", { className: "ceo-org-children" },
+              node.children.map(function (child) {
+                return h(OrgNode, {
+                  key: child.seat, node: child,
+                  selectedSeat: props.selectedSeat, onSelectSeat: props.onSelectSeat,
+                  changedSeats: changedSeats,
+                });
+              })))
         : null);
+  }
+
+  // Pending approval card: task + amber PENDING badge + Type 1 marker +
+  // Approve / Reject / Assign. Assign uses the same route as the task
+  // detail panel (owner = seat). Approval here is state, not an enforced
+  // execution boundary — v0.5.0 is flag-only, stated in the UI note.
+  function ApprovalRow(props) {
+    var t = props.task;
+    var _s = useState(t.seat || "");
+    var assignSeat = _s[0], setAssignSeat = _s[1];
+    var key = t.task_id;
+    var assignable = t.status === "proposed" || t.status === "approved";
+    return h("div", { className: "ceo-approval-card" },
+      h("div", { className: "ceo-task-meta" },
+        h("span", { className: "ceo-pending-badge" }, "Pending"),
+        t.approval_required ? h(Badge, { className: "ceo-type1" }, "Type 1") : null),
+      h(TaskCard, { task: t, selected: props.selected, onSelect: props.onSelect, changed: props.changed }),
+      h("div", { className: "ceo-approval-actions" },
+        h(Button, {
+          className: "ceo-approve",
+          disabled: props.busy === "approve:" + key,
+          onClick: function () { props.onApprove(key); },
+        }, props.busy === "approve:" + key ? "Approving…" : "Approve"),
+        h(Button, {
+          className: "ceo-reject",
+          disabled: props.busy === "reject:" + key,
+          onClick: function () { props.onReject(key); },
+        }, props.busy === "reject:" + key ? "Rejecting…" : "Reject"),
+        assignable
+          ? h("span", { className: "ceo-detail-assign" },
+              h("select", {
+                className: "ceo-select", value: assignSeat,
+                onChange: function (e) { setAssignSeat(e.target.value); },
+              },
+                h("option", { value: "" }, "Assign to…"),
+                (props.seats || []).map(function (s) {
+                  return h("option", { key: s.seat, value: s.seat }, s.display_name || s.seat);
+                })),
+              h(Button, {
+                disabled: !assignSeat || props.busy === "assign:" + key,
+                onClick: function () { props.onAssign(key, assignSeat); },
+              }, props.busy === "assign:" + key ? "Assigning…" : "Assign"))
+          : null));
   }
 
   function CEOPackPage() {
@@ -452,24 +505,34 @@
     var approvals = (data && data.approvals) || null;
     var runs = ((data && data.runs) || {}).runs || [];
 
+    // Board chips map to real lifecycle states: In Progress covers
+    // assigned + running; Done covers completed + verified. Blocked,
+    // failed, and rejected tasks show under All only.
+    var BOARD_FILTERS = {
+      all: null,
+      proposed: ["proposed"],
+      approved: ["approved"],
+      "in-progress": ["assigned", "running"],
+      done: ["completed", "verified"],
+    };
     var filteredTasks = useMemo(function () {
       var q = filterText.trim().toLowerCase();
+      var allowed = BOARD_FILTERS[filterStatus] || null;
       return tasks.filter(function (t) {
         if (selectedSeat && t.seat !== selectedSeat) return false;
-        if (filterStatus !== "all" && t.status !== filterStatus) return false;
+        if (allowed && allowed.indexOf(t.status) === -1) return false;
         if (q && (t.title || "").toLowerCase().indexOf(q) === -1) return false;
         return true;
       });
     }, [tasks, selectedSeat, filterStatus, filterText]);
 
-    var grouped = useMemo(function () {
-      var g = {};
-      STATUS_ORDER.forEach(function (s) { g[s] = []; });
-      filteredTasks.forEach(function (t) {
-        (g[t.status] || (g[t.status] = [])).push(t);
-      });
-      return g;
-    }, [filteredTasks]);
+    // Chip counts come from the actual returned task data, not from
+    // the seat/search-filtered view.
+    function boardCount(key) {
+      var allowed = BOARD_FILTERS[key];
+      if (!allowed) return tasks.length;
+      return tasks.filter(function (t) { return allowed.indexOf(t.status) !== -1; }).length;
+    }
 
     function panelError(key, what) {
       if (!errors[key]) return null;
@@ -513,18 +576,19 @@
           "No tasks yet — the registry is empty. Assign work from chat (ceo_task_create) and it shows up here.");
       }
       var c = summary.tasks_by_status || {};
-      function stat(label, value) {
-        return h("div", { className: "ceo-stat" },
+      function stat(label, value, accent, icon) {
+        return h("div", { className: "ceo-stat ceo-stat-" + accent },
+          h("span", { className: "ceo-stat-icon", "aria-hidden": "true" }, icon),
           h("span", { className: "ceo-stat-value" }, String(value)),
           h("span", { className: "ceo-stat-label" }, label));
       }
       return h("div", { className: "ceo-stats" },
-        stat("Tasks", summary.tasks_total),
-        stat("Running", c.running || 0),
-        stat("Blocked / failed", (c.blocked || 0) + (c.failed || 0)),
-        stat("Pending approval", summary.pending_approvals),
-        stat("Verified", c.verified || 0),
-        stat("Runs", summary.total_runs));
+        stat("Tasks", summary.tasks_total, "gold", "▤"),
+        stat("Running", c.running || 0, "teal", "▶"),
+        stat("Blocked / failed", (c.blocked || 0) + (c.failed || 0), "red", "⚠"),
+        stat("Pending approval", summary.pending_approvals, "amber", "◷"),
+        stat("Verified", c.verified || 0, "green", "✓"),
+        stat("Runs", summary.total_runs, "teal", "▸"));
     }
 
     function renderOrg() {
@@ -534,6 +598,14 @@
       var seatTasks = selectedSeat
         ? tasks.filter(function (t) { return t.seat === selectedSeat; })
         : [];
+      // Live Agent Activity side panel: real roster seats, newest activity
+      // first. Name, seat, last-active time, live dot — no invented
+      // "working on" lines.
+      var liveSeats = (roster.seats || []).slice().sort(function (a, b) {
+        var ta = a.last_activity ? new Date(a.last_activity).getTime() : 0;
+        var tb = b.last_activity ? new Date(b.last_activity).getTime() : 0;
+        return tb - ta;
+      });
       return h("div", null,
         h("p", { className: "ceo-note" },
           "Reporting shown by the plugin's accountability model — the head seat holds priorities. ",
@@ -541,16 +613,31 @@
           roster.snapshot_loaded
             ? "Roster loaded from the applied install config."
             : "No install config seen yet — showing the default roster."),
-        root ? h(OrgNode, { node: root, selectedSeat: selectedSeat, onSelectSeat: setSelectedSeat, changedSeats: changed.seats }) : null,
-        selectedSeat ? h("div", { className: "ceo-seat-tasks" },
-          h("h3", null, "Assignments: " + selectedSeat + " (" + seatTasks.length + ")"),
-          seatTasks.length
-            ? seatTasks.map(function (t) {
-                return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
-              })
-            : h(EmptyState, null, "No assignments recorded for this seat yet."),
-          h(Button, { onClick: function () { setSelectedSeat(null); } }, "Clear seat filter"))
-          : h("p", { className: "ceo-note" }, "Click a seat to see its assignments."));
+        h("div", { className: "ceo-org-layout" },
+          h("div", null,
+            root ? h(OrgNode, { node: root, selectedSeat: selectedSeat, onSelectSeat: setSelectedSeat, changedSeats: changed.seats }) : null,
+            selectedSeat ? h("div", { className: "ceo-seat-tasks" },
+              h("h3", null, "Assignments: " + selectedSeat + " (" + seatTasks.length + ")"),
+              seatTasks.length
+                ? seatTasks.map(function (t) {
+                    return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
+                  })
+                : h(EmptyState, null, "No assignments recorded for this seat yet."),
+              h(Button, { onClick: function () { setSelectedSeat(null); } }, "Clear seat filter"))
+              : h("p", { className: "ceo-note" }, "Click a seat to see its assignments.")),
+          h("div", { className: "ceo-live-panel" },
+            h("h3", null, "Live Agent Activity"),
+            liveSeats.length
+              ? liveSeats.map(function (s) {
+                  var live = isLive(s.last_activity);
+                  return h("div", { key: s.seat, className: "ceo-live-row" },
+                    h(Avatar, { node: s, small: true }),
+                    h("div", { className: "ceo-live-row-main" },
+                      h("div", { className: "ceo-live-row-name" }, s.display_name || s.seat),
+                      h("div", { className: "ceo-live-row-meta" }, s.seat + " · Last active: " + timeOrUnknown(s.last_activity))),
+                    live ? h("span", { className: "ceo-live-dot", title: "Active in the last 2 minutes" }) : null);
+                })
+              : h(EmptyState, null, "No seats in the roster yet."))));
     }
 
     function renderActivity() {
@@ -558,25 +645,28 @@
       if (!activity) return h("div", { className: "ceo-loading" }, "Loading activity…");
       var hist = activity.recent_history || [];
       return h("div", null,
-        h("h3", null, "Running now (" + (activity.running || []).length + ")"),
-        (activity.running || []).length
-          ? activity.running.map(function (t) {
-              return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
-            })
-          : h(EmptyState, null, "Nothing running right now."),
-        h("h3", null, "Blocked / stuck (" + (activity.stuck || []).length + ")"),
-        (activity.stuck || []).length
-          ? activity.stuck.map(function (t) {
-              return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
-            })
-          : h(EmptyState, null, "Nothing blocked or stuck."),
+        h("div", { className: "ceo-activity-panels" },
+          h("div", { className: "ceo-activity-panel" },
+            h("h3", null, "Running now (" + (activity.running || []).length + ")"),
+            (activity.running || []).length
+              ? activity.running.map(function (t) {
+                  return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
+                })
+              : h(EmptyState, null, "Nothing running right now.")),
+          h("div", { className: "ceo-activity-panel" },
+            h("h3", null, "Blocked / stuck (" + (activity.stuck || []).length + ")"),
+            (activity.stuck || []).length
+              ? activity.stuck.map(function (t) {
+                  return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
+                })
+              : h(EmptyState, null, "Nothing blocked or stuck."))),
         h("h3", null, "Recent execution history"),
         hist.length
           ? h("ul", { className: "ceo-history" }, hist.map(function (ev) {
               return h("li", { key: String(ev.id), className: changed.history[ev.id] ? "ceo-history-new" : undefined },
-                h("span", null, (ev.title || ev.task_id) + ": " + (ev.from_status || "—") + " → " + ev.to_status),
+                h("span", null, (ev.title || ev.task_id)),
                 h("span", { className: "ceo-history-meta" },
-                  " · " + (ev.actor || "system") + " · " + timeOrUnknown(ev.at)),
+                  " · " + (ev.from_status || "—") + " → " + ev.to_status + " · " + (ev.actor || "system") + " · " + timeOrUnknown(ev.at)),
                 ev.note ? h("span", { className: "ceo-history-note" }, " — " + ev.note) : null);
             }))
           : h(EmptyState, null, "No recorded activity yet."));
@@ -585,8 +675,33 @@
     function renderBoard() {
       if (errors.tasks) return panelError("tasks", "task board");
       if (!data || !data.tasks) return h("div", { className: "ceo-loading" }, "Loading tasks…");
+      var chips = [
+        { id: "all", label: "All" },
+        { id: "proposed", label: "Proposed" },
+        { id: "approved", label: "Approved" },
+        { id: "in-progress", label: "In Progress" },
+        { id: "done", label: "Done" },
+      ];
       return h("div", null,
+        h("div", { className: "ceo-create-panel" },
+          h("h3", null, "Create New Task"),
+          h(CreateTaskForm, {
+            runs: runs,
+            seats: roster ? roster.seats : [],
+            busy: writeBusy === "create",
+            onCreate: function (fields) {
+              return doWrite("create", postJSON("/tasks", fields));
+            },
+          })),
         h("div", { className: "ceo-filters" },
+          h("div", { className: "ceo-chips", role: "tablist" },
+            chips.map(function (c) {
+              return h(Button, {
+                key: c.id,
+                className: cn("ceo-chip", filterStatus === c.id && "ceo-chip-active"),
+                onClick: function () { setFilterStatus(c.id); },
+              }, c.label, h("span", { className: "ceo-chip-count" }, "(" + boardCount(c.id) + ")"));
+            })),
           h(Label, null, "Seat"),
           h("select", {
             className: "ceo-select", value: selectedSeat || "",
@@ -595,15 +710,6 @@
             h("option", { value: "" }, "All seats"),
             (roster ? roster.seats : []).map(function (s) {
               return h("option", { key: s.seat, value: s.seat }, s.display_name || s.seat);
-            })),
-          h(Label, null, "Status"),
-          h("select", {
-            className: "ceo-select", value: filterStatus,
-            onChange: function (e) { setFilterStatus(e.target.value); },
-          },
-            h("option", { value: "all" }, "All statuses"),
-            STATUS_ORDER.map(function (s) {
-              return h("option", { key: s, value: s }, STATUS_LABEL[s]);
             })),
           h(Input, {
             className: "ceo-search", placeholder: "Search tasks…",
@@ -624,25 +730,13 @@
                   },
                 }))
           : null,
-        h(CreateTaskForm, {
-          runs: runs,
-          seats: roster ? roster.seats : [],
-          busy: writeBusy === "create",
-          onCreate: function (fields) {
-            return doWrite("create", postJSON("/tasks", fields));
-          },
-        }),
         tasks.length === 0
           ? h(EmptyState, null, "No tasks in the registry yet. Create one from chat (ceo_task_create) — it appears here, with its real status, once it exists.")
-          : STATUS_ORDER.map(function (s) {
-              var list = grouped[s] || [];
-              if (!list.length) return null;
-              return h("div", { key: s, className: "ceo-status-group" },
-                h("h3", null, STATUS_LABEL[s] + " (" + list.length + ")"),
-                list.map(function (t) {
-                  return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
-                }));
-            }));
+          : filteredTasks.length === 0
+            ? h(EmptyState, null, "No tasks in this view.")
+            : filteredTasks.map(function (t) {
+                return h(TaskCard, { key: t.task_id, task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] });
+              }));
     }
 
     function renderApprovals() {
@@ -655,20 +749,18 @@
         h("h3", null, "Pending owner approval (" + approvals.pending_count + ")"),
         pending.length
           ? pending.map(function (t) {
-              var key = t.task_id;
-              return h("div", { key: key, className: "ceo-approval-row" },
-                h(TaskCard, { task: t, selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId, changed: changed.tasks[t.task_id] }),
-                h("div", { className: "ceo-approval-actions" },
-                  h(Button, {
-                    disabled: writeBusy === "approve:" + key,
-                    onClick: function () { doWrite("approve:" + key, postJSON("/tasks/" + encodeURIComponent(key) + "/approve", {})); },
-                  }, writeBusy === "approve:" + key ? "Approving…" : "Approve"),
-                  h(Button, {
-                    disabled: writeBusy === "reject:" + key,
-                    onClick: function () { doWrite("reject:" + key, postJSON("/tasks/" + encodeURIComponent(key) + "/reject", {})); },
-                  }, writeBusy === "reject:" + key ? "Rejecting…" : "Reject")));
+              return h(ApprovalRow, {
+                key: t.task_id, task: t,
+                selected: selectedTaskId === t.task_id, onSelect: setSelectedTaskId,
+                changed: changed.tasks[t.task_id],
+                seats: roster ? roster.seats : [],
+                busy: writeBusy,
+                onApprove: function (id) { doWrite("approve:" + id, postJSON("/tasks/" + encodeURIComponent(id) + "/approve", {})); },
+                onReject: function (id) { doWrite("reject:" + id, postJSON("/tasks/" + encodeURIComponent(id) + "/reject", {})); },
+                onAssign: function (id, seat) { doWrite("assign:" + id, postJSON("/tasks/" + encodeURIComponent(id) + "/assign", { owner: seat })); },
+              });
             })
-          : h(EmptyState, null, "Nothing waiting on the owner right now."),
+          : h(EmptyState, null, "No pending owner approvals."),
         h("h3", null, "Approval history"),
         hist.length
           ? h("ul", { className: "ceo-history" }, hist.map(function (ev) {
@@ -677,7 +769,7 @@
                 h("span", { className: "ceo-history-meta" },
                   " · by " + (ev.actor || "unknown") + " · " + timeOrUnknown(ev.at)));
             }))
-          : h(EmptyState, null, "No approvals recorded yet."),
+          : h(EmptyState, null, "No approval history yet."),
         h("p", { className: "ceo-note" }, approvals.decisions_note || ""));
     }
 
@@ -690,10 +782,13 @@
 
     return h("div", { className: "ceo-pack" },
       h("div", { className: "ceo-header" },
-        h("div", null,
-          h("h1", null, "CEO Pack — Executive Workspace"),
-          h("p", { className: "ceo-subtitle" },
-            "Your AI C-suite at a glance. Every number below is a live read of the task registry — nothing is invented.")),
+        h("div", { className: "ceo-header-title" },
+          h("span", { className: "ceo-crown", "aria-hidden": "true" }, "♛"),
+          h("div", null,
+            h("h1", null, "CEO Pack"),
+            h("div", { className: "ceo-title-sub" }, "Executive Workspace"),
+            h("p", { className: "ceo-subtitle" },
+              "Your AI C-suite at a glance. Every number below is a live read of the task registry — nothing is invented."))),
         h("div", { className: "ceo-header-actions" },
           h(Button, { onClick: load }, "Refresh"),
           h("span", { className: "ceo-updated" },

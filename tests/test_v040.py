@@ -414,9 +414,10 @@ class SlashCommandsRegistered(unittest.TestCase):
                              "q1", "q2", "q3", "monthly-closeout", "daily-checks", "eod-checks",
                              "performance-checks", "status-check", "roster",
                              "task-create", "task-status", "task-list", "task-approve", "task-assign",
+                             "task-complete",
                              "run-create", "run-status", "ceo delegation"]:
             self.assertIn(name, seen, name)
-        self.assertEqual(len(seen), 29)
+        self.assertEqual(len(seen), 30)
 
 
 if __name__ == "__main__":

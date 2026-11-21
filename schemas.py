@@ -367,6 +367,26 @@ CEO_TASK_ASSIGN = {
     },
 }
 
+CEO_TASK_COMPLETE = {
+    "name": "ceo_task_complete",
+    "description": (
+        "Mark a running task completed. Only a task in 'running' can be "
+        "completed — proposed/approved/assigned has not started, "
+        "blocked/failed goes back through running, and terminal states "
+        "(completed/verified/rejected) never move again. Completed is NOT "
+        "verified: verification is a separate step (completed -> verified) "
+        "and has no tool yet."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "Task UUID."},
+            "completed_by": {"type": "string", "description": "Who marked it complete (owner by default)."},
+        },
+        "required": ["task_id"],
+    },
+}
+
 CEO_RUN_CREATE = {
     "name": "ceo_run_create",
     "description": (

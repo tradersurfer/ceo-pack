@@ -26,14 +26,13 @@ You do not need seven agents. A seat is a job title. If you made a real Hermes p
 
 - Anything big, priced, or hard to undo stops and asks you first. You stay the boss.
 - Risk flags go at the top level of the tool call, never buried inside the arguments.
-- One owner and one due date per assignment. The pack does not track duplicates — you track (seat, due date) yourself.
-- Tasks need a run first — start a run from chat, then create tasks in it. A task has no due date of its own; the due date lives on the assignment.
+- One owner and one due date per assignment.
+- Re-assigning a task to the same owner changes nothing; giving it to someone else while it already has an owner is refused — the task keeps its current owner. (`ceo_task_assign`)
+- Finishing a task: only a task that is running can be marked complete (`ceo_task_complete`, or the Mark complete button on the board). Completed is not verified — verification is a separate step.
+- Tasks need a run first — start a run from chat, then create tasks in it. A task can carry its own due date — set it at creation or leave it off; an overdue task shows an Overdue badge on the board.
 - Never invent a price, a fact, or client work. If a number is unknown, say so and ask the owner.
 - Every answer is in plain words a business owner can follow — no jargon, short sentences, what happens next.
 
 ## Known gaps (v0.5.0)
 
-- No `ceo_task_complete` tool yet — finishing a task goes through the task's status, not a single tool call.
-- `ceo_assign` does not track duplicates.
-- `ceo_task_create` has no due date field — use `ceo_assign` for dated work.
 - Fixed in v0.5.0: signing a document now flags outside-authority risk (the NDA case), and "fire the shift lead" now routes to the Chief of Staff, not the CRO.

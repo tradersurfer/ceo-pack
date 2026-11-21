@@ -27,6 +27,7 @@ provides_tools:
   - ceo_task_list
   - ceo_task_approve
   - ceo_task_assign
+  - ceo_task_complete
   - ceo_run_create
   - ceo_run_status
 provides_hooks:

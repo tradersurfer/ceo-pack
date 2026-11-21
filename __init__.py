@@ -282,6 +282,10 @@ def register(ctx):
         schema=schemas.CEO_TASK_ASSIGN, handler=tools.ceo_task_assign,
     )
     ctx.register_tool(
+        name="ceo_task_complete", toolset="ceo-pack",
+        schema=schemas.CEO_TASK_COMPLETE, handler=tools.ceo_task_complete,
+    )
+    ctx.register_tool(
         name="ceo_run_create", toolset="ceo-pack",
         schema=schemas.CEO_RUN_CREATE, handler=tools.ceo_run_create,
     )
@@ -382,6 +386,8 @@ def register(ctx):
          "first read the user's words below and work out which task to approve and who is approving it (the owner)"),
         ("task-assign", "ceo_task_assign", "Assign a task to an owner/profile",
          "first read the user's words below and work out which task and who owns it now"),
+        ("task-complete", "ceo_task_complete", "Mark a running task completed (completed, not verified)",
+         "first read the user's words below and work out which task to mark complete — only a task that is running can complete"),
         ("run-create", "ceo_run_create", "Create an orchestration run",
          "first read the user's words below and work out the goal for the run in one plain sentence"),
         ("run-status", "ceo_run_status", "Get run status and progress",

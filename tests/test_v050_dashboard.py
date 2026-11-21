@@ -447,6 +447,7 @@ class TestErrorsVisible(DashboardBase):
             "/tasks",
             "/tasks/{task_id}/approve",
             "/tasks/{task_id}/assign",
+            "/tasks/{task_id}/complete",
             "/tasks/{task_id}/reject",
         ])
         for methods, path in _routes():
@@ -555,7 +556,7 @@ class TestLastActivity(DashboardBase):
 
 
 class TestDashboardWrites(DashboardBase):
-    """The four POST routes: same backend, same checks as the chat tools,
+    """The five POST routes: same backend, same checks as the chat tools,
     mapped to HTTP codes. Every assertion compares against a direct
     registry read, never against the response alone."""
 
@@ -991,9 +992,10 @@ class TestUxUiFixes(DashboardBase):
 
     def test_desktop_task_rows_carry_owner_due_and_overdue(self):
         # Fix 6: TaskRow shows owner / due date / Overdue badge with the
-        # web's rule (non-terminal, due before today).
+        # backend-derived overdue flag (non-terminal, due before today).
         js = self._desktop_js()
-        self.assertIn("function isOverdue", js)
+        self.assertIn("task.overdue", js)
+        self.assertNotIn("isOverdue", js)
         self.assertIn("Overdue", js)
         self.assertIn("task.owner", js)
         self.assertIn("due ${task.due_date}", js)
@@ -1008,7 +1010,7 @@ class TestUxUiFixes(DashboardBase):
         self.walk(tid, "approved", "assigned", "running", "completed")
         detail = _call(api.task_detail, task_id=tid)
         for key in ("status", "seat", "owner", "model_route", "due_date",
-                    "created_at", "started_at", "completed_at",
+                    "overdue", "created_at", "started_at", "completed_at",
                     "approved_by", "retry_count", "description",
                     "execution", "dependencies", "dependencies_met",
                     "history"):

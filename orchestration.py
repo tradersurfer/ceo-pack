@@ -754,35 +754,92 @@ def _step(n, tool, seat, verify_by, approval_required=False):
     }
 
 
-def _pick_model(model_key):
-    """Resolve the model choice without crashing the plan on a bad key."""
+# Fallback mirror of models.COST_MODE_KEYS, used only when the models
+# module cannot be imported. Keep in sync with models.py.
+_COST_MODE_KEYS_FALLBACK = {
+    "free": ["free_default", "free_worker", "free_worker_2", "free_random"],
+    "paid_value": ["paid_value", "free_default", "free_worker",
+                   "free_worker_2", "free_random"],
+    "paid_flagship": ["paid_flagship", "paid_value", "free_default",
+                      "free_worker", "free_worker_2", "free_random"],
+}
+
+
+def _permitted_model_keys(cost_mode):
+    """Permitted model keys for a cost mode, from models.COST_MODE_KEYS
+    (local fallback mirror when the models module cannot be imported)."""
     try:
-        if model_key:
-            try:
-                from .models import get_model
-            except ImportError:
-                from models import get_model
-            exact = get_model(model_key)
-            if exact is not None:
-                return {
-                    "recommended": exact,
-                    "rule": "Model chosen by install config. CEO seat gets the orchestration model; workers get fast, narrow models.",
-                    "fallbacks": [],
-                }
-        if not model_key or model_key == "free_default":
-            return choose_model(task_type="ceo")
-        budget = model_key if str(model_key).startswith("paid") else "free"
-        return choose_model(task_type="ceo", budget=budget)
-    except Exception:  # unknown key -> fall back to the safe default
-        return choose_model(task_type="ceo")
+        try:
+            from .models import keys_for_cost_mode
+        except ImportError:
+            from models import keys_for_cost_mode
+        return keys_for_cost_mode(cost_mode)
+    except Exception:
+        mode = cost_mode.strip().lower() if isinstance(cost_mode, str) else ""
+        return list(_COST_MODE_KEYS_FALLBACK.get(mode, []))
 
 
-def plan_tool_calls(goal, model_key="free_default"):
+def _pick_model(model_key, cost_mode=None):
+    """Resolve the model choice under the cost boundary — never silently substitute.
+
+    cost_mode defaults to the installed cost_mode. Rules (Chat #5):
+    - no model supplied -> the cost mode picks its default (free ->
+      free_default, paid_value -> paid_value, paid_flagship ->
+      paid_flagship, via choose_model's budget mapping).
+    - a supplied key must exist AND be permitted under the cost mode.
+    - anything else -> {"valid": False, "error": ...}: a clean rejection
+      naming the model, the cost mode, and the permitted keys. The caller
+      (plan_tool_calls) turns it into an error envelope; no default is
+      silently substituted and nothing crashes.
+    A model catalog that cannot be imported at all (standalone checkout
+    with the test stand-in) still resolves the cost mode's default the old
+    way — nothing can be validated there, so nothing is substituted either.
+    """
+    try:
+        try:
+            from .models import get_model, MODELS
+        except ImportError:
+            from models import get_model, MODELS
+    except ImportError:
+        mode = (cost_mode if cost_mode is not None else INSTALL.get("cost_mode") or "free")
+        mode = str(mode).strip().lower()
+        if mode not in _COST_MODES:
+            mode = "free"
+        return choose_model(task_type="ceo", budget=mode)
+    mode = (cost_mode if cost_mode is not None else INSTALL.get("cost_mode") or "free")
+    mode = str(mode).strip().lower()
+    if mode not in _COST_MODES:
+        return {"valid": False, "status": "error",
+                "error": "Unknown cost_mode %r. Valid: %s." % (mode, ", ".join(_COST_MODES))}
+    permitted = _permitted_model_keys(mode)
+    if not model_key:
+        return choose_model(task_type="ceo", budget=mode)
+    key = str(model_key).strip()
+    exact = get_model(key)
+    if exact is None:
+        return {"valid": False, "status": "error",
+                "error": "Unknown model key %r. Valid keys: %s. No model was substituted."
+                         % (key, ", ".join(m["key"] for m in MODELS))}
+    if key not in permitted:
+        return {"valid": False, "status": "error",
+                "error": "Model %r is not allowed under cost_mode %r. Permitted: %s. "
+                         "Raise cost_mode or pick a permitted model — nothing was substituted."
+                         % (key, mode, ", ".join(permitted))}
+    return {
+        "recommended": exact,
+        "rule": "Model chosen by install config. CEO seat gets the orchestration model; workers get fast, narrow models.",
+        "fallbacks": [],
+    }
+
+
+def plan_tool_calls(goal, model_key="free_default", cost_mode=None):
     """Return an ordered orchestration plan for a goal."""
     if not isinstance(goal, str) or not goal.strip():
         return {"valid": False, "error": "A non-empty goal is required to plan.", "status": "error"}
 
-    model = _pick_model(model_key)
+    model = _pick_model(model_key, cost_mode)
+    if not model.get("valid", True):
+        return {"valid": False, "error": model.get("error", "Model choice was refused."), "status": "error"}
     head = HEAD_SEAT
     steps = [
         _step(1, "ceo_brief", head, "Brief states goal, decision needed, and approval gate."),
@@ -1174,6 +1231,8 @@ def apply_install_config(cfg):
     applied, notes = [], []
     if not isinstance(cfg, dict):
         return applied, ["install config was not an object; nothing applied."]
+    _prev_cost_mode = INSTALL["cost_mode"]
+    _prev_model_choice = INSTALL["model_choice"]
     for key in ("business_name", "owner_name"):
         val = cfg.get(key)
         if isinstance(val, str) and val.strip():
@@ -1212,6 +1271,29 @@ def apply_install_config(cfg):
             applied.append("model_choice")
         else:
             notes.append("model_choice %r refused. Valid keys: %s." % (val, ", ".join(keys)))
+    # Cost/model precedence (Chat #5): the effective model_choice must be
+    # permitted under the effective cost_mode. When the combination is
+    # incompatible, refuse the value that created it and keep the previous
+    # one — never silently substitute a model. A config that changes
+    # neither value cannot create an incompatibility, so it is never
+    # refused here. When both were supplied and clash, the model loses:
+    # the cost mode is the policy, the model is the request.
+    permitted = _permitted_model_keys(INSTALL["cost_mode"])
+    if INSTALL["model_choice"] not in permitted:
+        if "model_choice" in applied:
+            notes.append(
+                "model_choice %r refused: cost_mode %r permits only %s. "
+                "Raise cost_mode or pick a permitted model."
+                % (INSTALL["model_choice"], INSTALL["cost_mode"], ", ".join(permitted)))
+            INSTALL["model_choice"] = _prev_model_choice
+            applied.remove("model_choice")
+        elif "cost_mode" in applied:
+            notes.append(
+                "cost_mode %r refused: current model_choice %r is not permitted under it. "
+                "Permitted: %s. Change model_choice first."
+                % (INSTALL["cost_mode"], INSTALL["model_choice"], ", ".join(permitted)))
+            INSTALL["cost_mode"] = _prev_cost_mode
+            applied.remove("cost_mode")
     if cfg.get("approval_required") is False:
         notes.append("approval_required=false was NOT applied: Type 1 actions always stop for the owner.")
     aliases = {}

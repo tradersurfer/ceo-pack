@@ -572,6 +572,55 @@ def approve_task(task_id: str, approved_by: str, note: Optional[str] = None, too
     return changed
 
 
+def complete_task(task_id: str, actor: str = "system", note: str = "", db_path: Optional[str] = None) -> bool:
+    """Mark a running task completed. Completed is NOT verified: the
+    legal-transition table allows completed only from running, and nothing
+    here touches the verified state — verification is a separate step
+    (completed -> verified) and has no tool yet. Returns True when the
+    task moved to completed."""
+    return update_task_status(task_id, "completed", actor=actor, note=note, db_path=db_path)
+
+
+def try_assign_task(task_id: str, owner: str, model_route: Optional[str] = None, actor: str = "system", db_path: Optional[str] = None) -> tuple:
+    """Assign with duplicate protection. Returns (outcome, task_or_None).
+
+    Outcomes:
+    - "assigned": fresh assign (proposed/approved -> assigned, owner set).
+    - "already_assigned": the task is already assigned to this owner —
+      idempotent success, nothing changed, no duplicate work, no history
+      row (a no-op is not an event).
+    - "conflict": the task is already assigned to a DIFFERENT owner —
+      refused, owner unchanged, no silent overwrite.
+    - "refused": status cannot be assigned (running/blocked/failed or any
+      terminal state) — the legal-transition table is the authority.
+    - "not_found": no such task.
+    One transaction: the read, the decision, and the write happen together,
+    so a concurrent assign cannot slip between the check and the write.
+    Assign stays staging only, never a security boundary (Type 1 gate
+    design): this stops duplicate work, it authorizes nothing.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row:
+            return "not_found", None
+        status = row["status"]
+        current_owner = row["owner"]
+        if status == "assigned":
+            if current_owner == owner:
+                return "already_assigned", dict(row)
+            return "conflict", dict(row)
+        if status not in ("proposed", "approved"):
+            return "refused", dict(row)
+        conn.execute(
+            "UPDATE tasks SET owner = ?, model_route = ?, status = 'assigned', updated_at = ? WHERE id = ?",
+            (owner, model_route, now, task_id)
+        )
+        _log_history(conn, task_id, status, "assigned", actor, "Assigned to %s" % owner)
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return "assigned", dict(row)
+
+
 def add_task_dependency(task_id: str, depends_on_task_id: str, db_path: Optional[str] = None) -> bool:
     """Add a dependency: task_id depends on depends_on_task_id."""
     with _connect(db_path) as conn:

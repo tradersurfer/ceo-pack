@@ -878,8 +878,8 @@ def ceo_task_approve(args, **kwargs):
     }, ignored=_ignored("ceo_task_approve", args))
 
 
-def ceo_task_assign(args, **kwargs):
-    """Assign a task to an owner/profile and optionally a model route."""
+def ceo_task_complete(args, **kwargs):
+    """Mark a running task completed. Completed is NOT verified."""
     args, bad = _prep(args)
     if bad:
         return bad
@@ -887,7 +887,55 @@ def ceo_task_assign(args, **kwargs):
         from . import tasks
     except ImportError:
         import tasks
-    
+
+    task_id, e = _text(args, "task_id")
+    if e:
+        return _err("Need task_id")
+    completed_by, e = _text(args, "completed_by", required=False)
+    if e:
+        return e
+
+    task = tasks.get_task(task_id)
+    if not task:
+        return _err(f"Task {task_id} not found")
+
+    # The legal-transition table allows completed only from running: a
+    # proposed/approved/assigned task has not started, blocked/failed goes
+    # back through running, and terminal states never move again.
+    status = task.get("status")
+    if status != "running":
+        if status in ("completed", "verified", "rejected"):
+            return _err(f"Task is already '{status}'. A {status} task cannot be completed again.")
+        return _err(f"Task is '{status}', not 'running'. Only a running task can be marked complete.")
+
+    ok = tasks.complete_task(task_id, actor=completed_by or "owner", note="Marked complete from chat")
+    if not ok:
+        return _err("Failed to complete task (it may have moved already)")
+
+    return _ok({
+        "task_id": task_id,
+        "task_status": "completed",
+        "completed_by": completed_by or "owner",
+        "note": "Task completed — completed, not verified. Verification is a separate step (completed -> verified).",
+    }, ignored=_ignored("ceo_task_complete", args))
+
+
+def ceo_task_assign(args, **kwargs):
+    """Assign a task to an owner/profile and optionally a model route.
+
+    Duplicate protection: re-assigning the same owner is an idempotent
+    no-op (nothing changes, no duplicate work); assigning a different
+    owner while the task is already assigned is a conflict, not an
+    overwrite. Assign stays staging only, never a security boundary.
+    """
+    args, bad = _prep(args)
+    if bad:
+        return bad
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
+
     task_id, e = _text(args, "task_id")
     if e:
         return _err("Need task_id")
@@ -895,22 +943,25 @@ def ceo_task_assign(args, **kwargs):
     if e:
         return _err("Need owner")
     model_route = args.get("model_route")
-    
-    task = tasks.get_task(task_id)
-    if not task:
-        return _err(f"Task {task_id} not found")
-    
-    if task.get("status") not in ("approved", "proposed"):
-        return _err(f"Task is in '{task.get('status')}' state. Can only assign approved/proposed tasks.")
-    
-    ok = tasks.assign_task(task_id, owner, model_route)
-    if not ok:
-        return _err("Failed to assign task")
 
-    # Assign binds an owner and activates the task: proposed/approved -> assigned.
-    # (The raw update_task_status() table refuses proposed -> assigned, so the
-    # assign operation has its own transition in tasks.move_to_assigned.)
-    tasks.move_to_assigned(task_id, actor=owner, note=f"Assigned to {owner}")
+    outcome, task = tasks.try_assign_task(task_id, owner, model_route, actor=owner)
+    if outcome == "not_found":
+        return _err(f"Task {task_id} not found")
+    if outcome == "refused":
+        return _err(f"Task is in '{task.get('status')}' state. Can only assign approved/proposed tasks.")
+    if outcome == "conflict":
+        return _err(
+            f"Task is already assigned to '{task.get('owner')}'. "
+            f"Assigning it to '{owner}' would overwrite the owner — refused. "
+            "The task keeps its current owner.")
+    if outcome == "already_assigned":
+        return _ok({
+            "task_id": task_id,
+            "owner": owner,
+            "model_route": task.get("model_route"),
+            "task_status": "assigned",
+            "note": f"Already assigned to '{owner}' — nothing changed.",
+        }, ignored=_ignored("ceo_task_assign", args))
 
     return _ok({
         "task_id": task_id,

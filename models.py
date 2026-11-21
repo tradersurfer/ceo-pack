@@ -88,6 +88,35 @@ MODELS = [
 DEFAULT_MODEL_KEY = "free_default"
 
 
+# Cost-mode ceilings (Chat decision #5, Nov 2026): a cost mode permits its
+# own tier and everything cheaper — it is a ceiling, not an exact tier.
+# Explicit model selection never overrides the cost boundary: an
+# incompatible request is rejected with the permitted keys named, never
+# silently substituted with a cheaper model.
+COST_MODE_KEYS = {
+    # Free buys only free models.
+    "free": ["free_default", "free_worker", "free_worker_2", "free_random"],
+    # Paid value buys the value model plus anything free.
+    "paid_value": ["paid_value", "free_default", "free_worker",
+                   "free_worker_2", "free_random"],
+    # Paid flagship buys everything.
+    "paid_flagship": ["paid_flagship", "paid_value", "free_default",
+                      "free_worker", "free_worker_2", "free_random"],
+}
+
+
+def keys_for_cost_mode(cost_mode):
+    """Permitted model keys for a cost mode, [] when the mode is unknown."""
+    if not isinstance(cost_mode, str):
+        return []
+    return list(COST_MODE_KEYS.get(cost_mode.strip().lower(), []))
+
+
+def model_allowed_for_cost_mode(model_key, cost_mode):
+    """True when the model key is permitted under the cost mode."""
+    return model_key in keys_for_cost_mode(cost_mode)
+
+
 def get_model(key):
     for model in MODELS:
         if model["key"] == key:

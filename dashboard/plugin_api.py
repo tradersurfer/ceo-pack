@@ -6,9 +6,9 @@ the agent process writes at registration). Nothing is invented: an empty
 registry returns empty lists and zero counts with an explicit empty flag,
 never fabricated activity.
 
-Writes exist, but only as four POST routes that call the same tasks.py
-functions the chat tools call (create_task, approve_task, assign_task +
-move_to_assigned, update_task_status) — the same lifecycle + permission
+Writes exist, but only as five POST routes that call the same tasks.py
+functions the chat tools call (create_task, approve_task, try_assign_task,
+complete_task, update_task_status) — the same lifecycle + permission
 checks, the same SQLite registry, the same history audit. The host
 authenticates every /api/ call, so the dashboard caller is an
 authenticated Hermes user (the owner). A second task engine in the
@@ -34,7 +34,7 @@ import json
 import logging
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -142,17 +142,35 @@ def _seed_roster() -> bool:
         return False
 
 
+def _is_overdue(task: dict) -> bool:
+    """Derived at read time, never stored: a non-terminal task whose due
+    date is before today. Same rule the frontends used to compute locally
+    (web isOverdue / Desktop isOverdue) — the backend flag is now the one
+    source of truth, so the frontends read it instead of recomputing."""
+    status = task.get("status")
+    due = task.get("due_date")
+    if not due or status in ("completed", "verified", "failed", "rejected"):
+        return False
+    try:
+        return date.fromisoformat(str(due)) < date.today()
+    except ValueError:
+        return False
+
+
 def _public_task(task: dict) -> dict:
     """Task row safe for the API: state only, no result/error payloads.
 
     ``execution`` is the validated delegated-execution record (Phase 3):
     the host-reported route / tokens / cost for the task's delegate run,
     or None when nothing was recorded. ``metadata`` itself stays stripped.
+    ``overdue`` is derived at read time from due_date + status (never
+    stored): a non-terminal task whose due date is before today.
     """
     out = {k: v for k, v in task.items() if k not in _TASK_STRIP}
     out["task_id"] = task.get("id")
     exec_rec = _tasks.execution_from_metadata(task.get("metadata")) if _tasks else {}
     out["execution"] = exec_rec or None
+    out["overdue"] = _is_overdue(task)
     return out
 
 
@@ -614,6 +632,26 @@ def reject_task_route(task_id: str, body: Optional[dict] = None):
     return _public_task(_tasks.get_task(task_id))
 
 
+@router.post("/tasks/{task_id}/complete")
+def complete_task_route(task_id: str, body: Optional[dict] = None):
+    _require_db()
+    task = _write_task_or_404(task_id)
+    status = task.get("status")
+    if status != "running":
+        if status in ("completed", "verified", "rejected"):
+            detail = "Task is already '%s'. A %s task cannot be completed again." % (status, status)
+        else:
+            detail = "Task is '%s', not 'running'. Only a running task can be marked complete." % status
+        raise HTTPException(status_code=409, detail=detail)
+    try:
+        ok = _tasks.complete_task(task_id, actor="owner (dashboard)", note="Marked complete from the dashboard")
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    if not ok:
+        raise HTTPException(status_code=409, detail="Task could not be completed (it may have moved already)")
+    return _public_task(_tasks.get_task(task_id))
+
+
 @router.post("/tasks/{task_id}/assign")
 def assign_task_route(task_id: str, body: dict):
     _require_db()
@@ -622,14 +660,14 @@ def assign_task_route(task_id: str, body: dict):
     owner = _text_field(body, "owner")
     model_route = _optional_text(body, "model_route")
     task = _write_task_or_404(task_id)
-    if task.get("status") not in ("approved", "proposed"):
-        raise HTTPException(status_code=409, detail="Task is in '%s' state. Can only assign approved/proposed tasks." % task.get("status"))
     try:
-        ok = _tasks.assign_task(task_id, owner, model_route)
-        if ok:
-            ok = _tasks.move_to_assigned(task_id, actor="owner (dashboard)", note="Assigned to %s (dashboard)" % owner)
+        outcome, stored = _tasks.try_assign_task(task_id, owner, model_route, actor="owner (dashboard)")
     except sqlite3.Error:
         raise HTTPException(status_code=503, detail="task registry unavailable")
-    if not ok:
-        raise HTTPException(status_code=409, detail="Task could not be assigned (it may have moved already)")
+    if outcome == "refused":
+        raise HTTPException(status_code=409, detail="Task is in '%s' state. Can only assign approved/proposed tasks." % task.get("status"))
+    if outcome == "conflict":
+        raise HTTPException(status_code=409, detail="Task is already assigned to '%s'. Assigning it to '%s' would overwrite the owner — refused. The task keeps its current owner." % (stored.get("owner"), owner))
+    # "assigned" and "already_assigned" both return the task; the
+    # already-assigned case changed nothing (idempotent re-assign).
     return _public_task(_tasks.get_task(task_id))

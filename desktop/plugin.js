@@ -40,6 +40,11 @@
  * Polling mirrors the web dashboard: every query refetches every 30s.
  * "Live" means last_activity under 2 minutes old. Missing timestamps render
  * "unknown" — never invented.
+ *
+ * Chat bin (v1): web only. Desktop plugins cannot drive the host /api/ws
+ * chat wire (ctx.rest/ctx.socket are scoped to this plugin's own backend),
+ * so this page links out to the web Sessions page via ctx.os.openExternal
+ * instead of shipping a composer that cannot authenticate.
  */
 
 import { host, PALETTE_AREA, queryClient, ROUTES_AREA, SIDEBAR_NAV_AREA, useQuery } from '@hermes/plugin-sdk'
@@ -81,6 +86,12 @@ let lastSeenPrimed = false
 
 // Bound in register() from ctx.rest (namespace-scoped to /api/plugins/ceo-pack).
 let rest = null
+// Bound in register() from ctx.os.openExternal. Chat is web-only in v1:
+// ctx.rest/ctx.socket are scoped to this plugin's own backend, so Desktop
+// cannot drive the host /api/ws chat wire. The page links out to the web
+// Sessions page instead — a link, not a dead composer.
+let openExternalFn = null
+const DESKTOP_SESSIONS_URL = 'http://localhost:9119/sessions' // default gateway port (hermes_cli/config_defaults.py: port 9119)
 
 function api(path, opts) {
   if (!rest) throw new Error('CEO Pack backend not bound yet')
@@ -160,17 +171,9 @@ function StatusPill({ status }) {
   })
 }
 
-const TERMINAL = { completed: true, verified: true, failed: true, rejected: true }
-
-// Same overdue rule as the web tab: a non-terminal task whose due date
-// is before today. No due date, no overdue badge.
-function isOverdue(task) {
-  if (!task || !task.due_date || TERMINAL[task.status]) return false
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const due = new Date(task.due_date + 'T00:00:00')
-  return !Number.isNaN(due.getTime()) && due < today
-}
+// Overdue is a backend-derived flag on the task object (plugin_api
+// _is_overdue: non-terminal, due date before today). The page reads it,
+// never recomputes it — one source of truth.
 
 // Full task detail, same fields the web TaskDetail shows: status, seat,
 // owner, route, due, created/started/completed, approved-by, retries,
@@ -360,6 +363,7 @@ function CeoPackPage() {
     approve: (id) => write(`/tasks/${id}/approve`, { method: 'POST' }),
     reject: (id) => write(`/tasks/${id}/reject`, { method: 'POST', body: { note: 'Rejected from Desktop' } }),
     assign: (id, owner) => write(`/tasks/${id}/assign`, { method: 'POST', body: { owner } }),
+    complete: (id) => write(`/tasks/${id}/complete`, { method: 'POST', body: {} }),
     create: (body) => write('/tasks', { method: 'POST', body })
   }
 
@@ -399,6 +403,23 @@ function CeoPackPage() {
               updatedText ? jsx('span', { style: { color: PAL.muted, fontSize: '0.85rem', whiteSpace: 'nowrap' }, children: updatedText }) : null
             ]
           })
+        ]
+      }),
+      // Chat lives on the web dashboard (v1) — Desktop cannot drive the host
+      // chat wire, so this is a link-out to the web Sessions page, not a
+      // composer. If openExternal is unavailable the URL still shows as text.
+      jsxs('div', {
+        style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', color: PAL.muted, fontSize: '0.85rem' },
+        children: [
+          jsx('span', { children: 'Chat lives on the web dashboard — ' }),
+          openExternalFn
+            ? jsx('button', {
+                type: 'button',
+                onClick: () => { void openExternalFn(DESKTOP_SESSIONS_URL) },
+                style: { padding: '2px 10px', border: `1px solid ${PAL.gold}`, background: 'transparent', color: PAL.gold, cursor: 'pointer', borderRadius: '4px', fontSize: '0.85rem' },
+                children: 'Open in Sessions'
+              })
+            : jsx('span', { children: `open ${DESKTOP_SESSIONS_URL} in your browser` })
         ]
       }),
       jsx(SummaryStrip, { summary: data.summary.data }),
@@ -700,7 +721,7 @@ function TaskRow({ task, changed }) {
           task.approval_required ? jsx('span', { style: { color: PAL.gold }, children: 'TYPE 1' }) : null,
           task.owner ? jsx('span', { children: task.owner }) : null,
           task.due_date ? jsx('span', { children: `due ${task.due_date}` }) : null,
-          isOverdue(task) ? jsx('span', { style: { border: `1px solid ${PAL.red}`, color: PAL.red, padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', borderRadius: '999px' }, children: 'Overdue' }) : null,
+          task.overdue ? jsx('span', { style: { border: `1px solid ${PAL.red}`, color: PAL.red, padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', borderRadius: '999px' }, children: 'Overdue' }) : null,
           jsx('span', { children: `${task.seat} · updated ${relTime(task.updated_at)}` })
         ]
       }),
@@ -716,6 +737,7 @@ function TaskCard({ task, writes, busy, changed, showPending, seats }) {
   const [detailLoading, setDetailLoading] = useState(false)
   const canApprove = task.status === 'proposed' && task.approval_required
   const canAssign = task.status === 'approved' || task.status === 'proposed'
+  const canComplete = task.status === 'running'
   const seatOptions = seats || []
   // Stage 1 gate note (web ApprovalRow parity): whether approving mints
   // a one-time ticket for the recorded action or is approval-only. The
@@ -760,7 +782,7 @@ function TaskCard({ task, writes, busy, changed, showPending, seats }) {
           task.approval_required ? jsx('span', { style: { color: PAL.gold }, children: 'TYPE 1' }) : null,
           task.owner ? jsx('span', { children: task.owner }) : null,
           task.due_date ? jsx('span', { children: `due ${task.due_date}` }) : null,
-          isOverdue(task) ? jsx('span', { style: { border: `1px solid ${PAL.red}`, color: PAL.red, padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', borderRadius: '999px' }, children: 'Overdue' }) : null,
+          task.overdue ? jsx('span', { style: { border: `1px solid ${PAL.red}`, color: PAL.red, padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', borderRadius: '999px' }, children: 'Overdue' }) : null,
           jsx('span', { children: `${task.seat} · updated ${relTime(task.updated_at)}` })
         ]
       }),
@@ -779,6 +801,13 @@ function TaskCard({ task, writes, busy, changed, showPending, seats }) {
             onClick: () => writes.reject(taskId(task)),
             style: { padding: '4px 12px', border: `1px solid ${PAL.red}`, background: 'transparent', color: PAL.red, cursor: 'pointer', borderRadius: '4px' },
             children: 'Reject'
+          }) : null,
+          canComplete ? jsx('button', {
+            type: 'button', disabled: busy,
+            onClick: () => writes.complete(taskId(task)),
+            title: 'Completed, not verified — verification is a separate step.',
+            style: { padding: '4px 12px', border: `1px solid ${PAL.teal}`, background: 'transparent', color: PAL.teal, fontWeight: 700, cursor: 'pointer', borderRadius: '4px' },
+            children: 'Mark complete'
           }) : null,
           canAssign ? jsxs('span', {
             style: { display: 'inline-flex', gap: '6px', alignItems: 'center' },
@@ -1009,7 +1038,8 @@ export default {
   name: 'CEO Pack',
   register(ctx) {
     rest = ctx.rest
-    ctx.onDispose(() => { rest = null })
+    openExternalFn = (ctx.os && typeof ctx.os.openExternal === 'function') ? ctx.os.openExternal.bind(ctx.os) : null
+    ctx.onDispose(() => { rest = null; openExternalFn = null })
 
     ctx.register({
       id: 'page',

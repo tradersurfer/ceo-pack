@@ -195,6 +195,9 @@ const STATUS_LABEL = {
           h("div", null, h("strong", null, "Completed: "), timeOrUnknown(d.completed_at)),
           h("div", null, h("strong", null, "Approved by: "), d.approved_by || "—"),
           h("div", null, h("strong", null, "Retries: "), String(d.retry_count == null ? 0 : d.retry_count))),
+        h("div", { className: "ceo-detail-desc" },
+          h("strong", null, "Description: "),
+          d.description || "none"),
         assignable
           ? h("div", { className: "ceo-detail-assign" },
               h("h4", null, "Assign"),
@@ -268,16 +271,26 @@ const STATUS_LABEL = {
     var runId = _r[0], setRunId = _r[1];
     var _a = useState(false);
     var type1 = _a[0], setType1 = _a[1];
+    var _d = useState("");
+    var dueDate = _d[0], setDueDate = _d[1];
+    var _de = useState("");
+    var description = _de[0], setDescription = _de[1];
     var runs = props.runs || [];
     var effectiveRun = runId || (runs[0] && runs[0].run_id) || "";
     var canSubmit = title.trim() && seat && effectiveRun && !props.busy;
     function submit() {
       if (!canSubmit) return;
+      // due_date / description are optional: undefined keys are dropped
+      // by JSON.stringify, so the backend sees them only when given. A
+      // bad due date is refused by the backend (400) and the parent shows
+      // the server's detail string inline — never a silent failure.
       props.onCreate({
         run_id: effectiveRun, seat: seat,
         title: title.trim(), approval_required: type1,
+        due_date: dueDate || undefined,
+        description: description.trim() || undefined,
       }).then(function () {
-        setTitle(""); setType1(false);
+        setTitle(""); setType1(false); setDueDate(""); setDescription("");
       }, function () { /* error shown by the parent */ });
     }
     if (!runs.length) {
@@ -310,6 +323,17 @@ const STATUS_LABEL = {
           onChange: function (e) { setType1(e.target.checked); },
         }),
         " Type 1 (needs owner approval)"),
+      h("input", {
+        type: "date", className: "ceo-select", value: dueDate,
+        title: "Due date (optional)",
+        onChange: function (e) { setDueDate(e.target.value); },
+      }),
+      h("textarea", {
+        className: "ceo-search", placeholder: "Description (optional)…",
+        value: description, rows: 2,
+        style: { flex: "1 1 100%" },
+        onChange: function (e) { setDescription(e.target.value); },
+      }),
       h(Button, { disabled: !canSubmit, onClick: submit },
         props.busy ? "Creating…" : "Create task"));
   }
@@ -355,12 +379,18 @@ const STATUS_LABEL = {
   // Approve / Reject / Assign. Assign uses the same route as the task
   // detail panel (owner = seat). Approval here is state, not an enforced
   // execution boundary — v0.5.0 is flag-only, stated in the UI note.
+  // Stage 1 gate: the note under the buttons says whether approving this
+  // task mints a one-time ticket for its recorded action, or is approval
+  // only (no action recorded). Warn mode only — nothing is enforced yet.
   function ApprovalRow(props) {
     var t = props.task;
     var _s = useState(t.seat || "");
     var assignSeat = _s[0], setAssignSeat = _s[1];
     var key = t.task_id;
     var assignable = t.status === "proposed" || t.status === "approved";
+    var gateNote = t.action_tool
+      ? "Approving mints a one-time ticket for " + t.action_tool + " (30 min, single use). Warn mode only — nothing is enforced yet."
+      : "This task names no action, so approving it mints no ticket — approval only. Warn mode only — nothing is enforced yet.";
     return h("div", { className: "ceo-approval-card" },
       h("div", { className: "ceo-task-meta" },
         h("span", { className: "ceo-pending-badge" }, "Pending"),
@@ -391,7 +421,8 @@ const STATUS_LABEL = {
                 disabled: !assignSeat || props.busy === "assign:" + key,
                 onClick: function () { props.onAssign(key, assignSeat); },
               }, props.busy === "assign:" + key ? "Assigning…" : "Assign"))
-          : null));
+          : null),
+      h("p", { className: "ceo-note" }, gateNote));
   }
 
   function CEOPackPage() {
@@ -571,10 +602,6 @@ const STATUS_LABEL = {
     function renderSummaryStrip() {
       if (errors.summary) return panelError("summary", "summary counts");
       if (!summary) return h("div", { className: "ceo-loading" }, "Loading summary…");
-      if (summary.empty) {
-        return h(EmptyState, null,
-          "No tasks yet — the registry is empty. Assign work from chat (ceo_task_create) and it shows up here.");
-      }
       var c = summary.tasks_by_status || {};
       function stat(label, value, accent, icon) {
         return h("div", { className: "ceo-stat ceo-stat-" + accent },
@@ -582,13 +609,21 @@ const STATUS_LABEL = {
           h("span", { className: "ceo-stat-value" }, String(value)),
           h("span", { className: "ceo-stat-label" }, label));
       }
-      return h("div", { className: "ceo-stats" },
-        stat("Tasks", summary.tasks_total, "gold", "▤"),
-        stat("Running", c.running || 0, "teal", "▶"),
-        stat("Blocked / failed", (c.blocked || 0) + (c.failed || 0), "red", "⚠"),
-        stat("Pending approval", summary.pending_approvals, "amber", "◷"),
-        stat("Verified", c.verified || 0, "green", "✓"),
-        stat("Runs", summary.total_runs, "teal", "▸"));
+      // An empty registry still shows the six cards with honest zeroes —
+      // hiding the strip made the dashboard look as if it failed to load.
+      // The "no tasks yet" pointer stays, as a note under the strip.
+      return h("div", null,
+        h("div", { className: "ceo-stats" },
+          stat("Tasks", summary.tasks_total, "gold", "▤"),
+          stat("Running", c.running || 0, "teal", "▶"),
+          stat("Blocked / failed", (c.blocked || 0) + (c.failed || 0), "red", "⚠"),
+          stat("Pending approval", summary.pending_approvals, "amber", "◷"),
+          stat("Verified", c.verified || 0, "green", "✓"),
+          stat("Runs", summary.total_runs, "teal", "▸")),
+        summary.empty
+          ? h("p", { className: "ceo-note" },
+              "No tasks yet — the registry is empty. Assign work from chat (ceo_task_create) and it shows up here.")
+          : null);
     }
 
     function renderOrg() {

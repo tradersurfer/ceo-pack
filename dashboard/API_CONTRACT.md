@@ -167,6 +167,25 @@ with per-run `task_count` and `status_counts` (computed from
 | `history[]` | `tasks.get_approval_history(50)` — history events where a task moved to `approved` (actor + timestamp). |
 | `decisions_note` | States plainly that free-form decisions logged in chat with `ceo_decision_log` are **not** stored by the plugin in v0.5.0; approval history here comes from the task registry. |
 
+Pending tasks carry `action_tool` / `action_args_hash` when the task
+names the exact action it will execute (hash only, never argument
+values). The approve route accepts optional `tool_name` + `arguments`
+in the body and returns `token_minted` / `token_id` for the ticket it
+minted (Stage 1 gate, warn mode — see `GET /gate-decisions`).
+
+### `GET /gate-decisions` — Type 1 gate audit log (Stage 1, warn/observe only)
+Query param: `limit` (integer 0–100, default 50). Returns the newest
+`gate_audit` rows first: `at`, `decision` (`would_allow` | `would_block` |
+`token_minted` | `token_revoked` | `hook_error`), `tool_name`,
+`args_hash` (SHA-256 of the canonical arguments — never the values),
+`task_id`, `token_id`, `approved_by`, `actor`, `session_id`, `reason`
+(`token_match` | `no_token` | `token_expired` | `token_used` |
+`token_revoked` | `modified_arguments` | `registry_unavailable` |
+`hook_error` | `uncertain_classification`), `mode` (`"warn"` in Stage 1).
+Warn mode is NOT enforcement: `would_block` means the gate would have
+stopped the call under Stage 2 rules; nothing was actually blocked and
+no ticket was consumed.
+
 ## Known limitations
 
 - **Roster snapshot freshness:** the snapshot is written when the plugin

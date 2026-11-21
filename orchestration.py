@@ -957,11 +957,12 @@ def _check_due_date(value, today=None):
     return True, None
 
 
-def make_tool_call(tool_name, arguments, seat="CEO", risk=None, today=None):
+def make_tool_call(tool_name, arguments, seat="CEO", risk=None, today=None, db_path=None):
     """Validate a tool call envelope. This does not execute an external tool.
 
     risk  — optional dict of Type 1 flags (see RISK_FLAGS) for this specific call.
     today — injectable date, for tests.
+    db_path — registry path for the advisory ticket lookup (None = default).
     """
     if tool_name not in ALLOWED_TOOLS:
         return _fail(tool_name,
@@ -1046,6 +1047,18 @@ def make_tool_call(tool_name, arguments, seat="CEO", risk=None, today=None):
         envelope["gate"] = "STOP: owner approval required for this item before dispatch."
     if warnings:
         envelope["warnings"] = warnings
+    # Stage 1 gate (warn/observe only): advisory ticket state for this
+    # exact call, so the agent can see before dispatching whether a
+    # one-time ticket exists. Advisory only — never enforcement, never
+    # raises; any lookup failure degrades to "none".
+    try:
+        try:
+            from . import tasks as _tasks
+        except ImportError:  # direct-module load (tests load files individually)
+            import tasks as _tasks
+        envelope["token_status"] = _tasks.token_status_for(tool_name, arguments, db_path=db_path)
+    except Exception:
+        envelope["token_status"] = "none"
     return envelope
 
 

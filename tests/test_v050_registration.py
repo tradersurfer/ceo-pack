@@ -122,8 +122,10 @@ class TestRegistration(unittest.TestCase):
         self.assertEqual(len(self.ctx.commands), 29)
 
     def test_hook_registered(self):
+        # Stage 1 gate (warn/observe only): pre_tool_call joined
+        # post_tool_call; the pinned list is the exact hook set.
         self.assertEqual([name for name, _ in self.ctx.hooks],
-                         ["post_tool_call"])
+                         ["post_tool_call", "pre_tool_call"])
 
     def test_delegation_provider_registered(self):
         self.assertEqual(len(self.ctx.providers), 1)

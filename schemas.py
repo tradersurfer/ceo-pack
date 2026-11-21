@@ -289,6 +289,8 @@ CEO_TASK_CREATE = {
             "risk_flags": {"type": "array", "items": {"type": "string"}, "description": "Risk flags: external, priced, irreversible, legal_or_financial, security, people, regulatory, reputation, outside_authority."},
             "parent_task_id": {"type": "string", "description": "Optional parent task ID for subtasks."},
             "metadata": {"type": "object", "description": "Extensible metadata."},
+            "tool_name": {"type": "string", "description": "Optional exact host tool this task will execute (Type 1 gate, Stage 1). Stored as the tool name only."},
+            "arguments": {"type": "object", "description": "Optional exact arguments for tool_name (Type 1 gate, Stage 1). Stored as a SHA-256 hash only — raw values are never stored. Approving the task mints a one-time ticket for this exact action."},
         },
         "required": ["run_id", "seat", "title"],
     },
@@ -330,13 +332,19 @@ CEO_TASK_APPROVE = {
     "name": "ceo_task_approve",
     "description": (
         "Approve a Type 1 task (owner only). Moves task from 'proposed' to 'approved'. "
-        "Records who approved and when."
+        "Records who approved and when. When the task names an exact action "
+        "(tool_name + arguments, here or at creation), approving mints a "
+        "one-time ticket for that exact action (30 minutes, single use). "
+        "A task with no recorded action is approved but mints no ticket — "
+        "approving alone authorizes nothing."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "task_id": {"type": "string", "description": "Task UUID."},
             "approved_by": {"type": "string", "description": "Name of the approver (owner)."},
+            "tool_name": {"type": "string", "description": "Optional exact host tool this task will execute (Type 1 gate, Stage 1). Stored as the tool name only."},
+            "arguments": {"type": "object", "description": "Optional exact arguments for tool_name (Type 1 gate, Stage 1). Stored as a SHA-256 hash only — raw values are never stored."},
         },
         "required": ["task_id", "approved_by"],
     },

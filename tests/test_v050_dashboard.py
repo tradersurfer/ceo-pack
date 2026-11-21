@@ -856,5 +856,189 @@ class TestRedesignContract(DashboardBase):
             self.assertEqual(found, set(), "fabricated metric keys: %s" % found)
 
 
+class TestUxUiFixes(DashboardBase):
+    """Chat audit reconciliation (Nov 21): the 10 still-open fixes.
+    Backend assertions compare against the seeded registry; frontend
+    assertions read the shipped JS source (same pattern as
+    TestManifest.test_entry_registers_plugin — this suite has no browser)."""
+
+    def _web_js(self):
+        return (ROOT / "dashboard" / "dist" / "index.js").read_text()
+
+    def _desktop_js(self):
+        return (ROOT / "desktop" / "plugin.js").read_text()
+
+    def test_empty_summary_carries_zero_counts_for_the_strip(self):
+        # Fix 1: an empty registry returns zero counts for all six cards
+        # (the web strip renders them now instead of hiding itself).
+        s = _call(api.summary)
+        self.assertTrue(s["empty"])
+        self.assertEqual(s["tasks_total"], 0)
+        self.assertEqual(s["tasks_by_status"], {})
+        self.assertEqual(s["pending_approvals"], 0)
+        self.assertEqual(s["total_runs"], 0)
+        # The web strip no longer replaces the cards with an EmptyState
+        # when empty — the pointer survives as a note under the strip.
+        js = self._web_js()
+        self.assertNotIn(
+            "if (summary.empty) {\n        return h(EmptyState, null,",
+            js, "web strip must not hide the six cards when empty")
+        self.assertIn("No tasks yet — the registry is empty.", js)
+
+    def test_blocked_failed_card_is_blocked_plus_failed_not_stuck(self):
+        # Fix 2: one blocked task with retries left is blocked+failed = 1
+        # but stuck = 0 (retries not exhausted) — the two definitions
+        # must not be confused, on either surface.
+        run_id = self.make_run()
+        tid = self.make_task(run_id)
+        self.walk(tid, "approved", "assigned", "running", "blocked")
+        s = _call(api.summary)
+        self.assertEqual(s["tasks_by_status"], {"blocked": 1})
+        self.assertEqual(s["stuck"], 0)
+        self.assertEqual(s["running"], 0)
+        self.assertEqual(
+            s["tasks_by_status"].get("blocked", 0)
+            + s["tasks_by_status"].get("failed", 0), 1)
+        # Running aligns too: top-level and by-status are the same count.
+        tid2 = self.make_task(run_id)
+        self.walk(tid2, "approved", "assigned", "running")
+        s = _call(api.summary)
+        self.assertEqual(s["running"], 1)
+        self.assertEqual(s["tasks_by_status"]["running"], 1)
+        # Both surfaces compute the card from tasks_by_status now.
+        self.assertIn("(c.blocked || 0) + (c.failed || 0)", self._web_js())
+        self.assertIn("(byStatus.blocked || 0) + (byStatus.failed || 0)",
+                      self._desktop_js())
+        self.assertNotIn("value: summary.stuck", self._desktop_js())
+        self.assertIn("value: byStatus.running", self._desktop_js())
+
+    def test_create_due_date_and_description_flow_through(self):
+        # Fix 5: due date + description accepted by the create route,
+        # stored, and returned in the payload.
+        run_id = self.make_run()
+        out = _call(api.create_task_route, body={
+            "run_id": run_id, "seat": "CFO", "title": "File Q3 taxes",
+            "due_date": "2026-12-31", "description": "Close the quarter."})
+        self.assertEqual(out["due_date"], "2026-12-31")
+        self.assertEqual(out["description"], "Close the quarter.")
+        row = tasks_mod.get_task(out["task_id"])
+        self.assertEqual(row["due_date"], "2026-12-31")
+        self.assertEqual(row["description"], "Close the quarter.")
+        detail = _call(api.task_detail, task_id=out["task_id"])
+        self.assertEqual(detail["description"], "Close the quarter.")
+        # A bad due date is still refused with a 400, not stored silently.
+        code, _d = _err_of(lambda: _call(api.create_task_route, body={
+            "run_id": run_id, "seat": "CFO", "title": "x",
+            "due_date": "yesterday"}))
+        self.assertEqual(code, 400)
+        # Both create forms send the two fields.
+        self.assertIn("due_date: dueDate", self._web_js())
+        self.assertIn("description: description.trim()", self._web_js())
+        self.assertIn('type: "date"', self._web_js())
+        self.assertIn("due_date: dueDate", self._desktop_js())
+        self.assertIn("description: description.trim()", self._desktop_js())
+        self.assertIn("type: 'date'", self._desktop_js())
+
+    def test_task_detail_carries_description_for_the_web_detail(self):
+        # Fix 7: the detail endpoint carries description, and the web
+        # TaskDetail renders it (zero `description` matches before).
+        run_id = self.make_run()
+        tid = self.make_task(run_id, description="Close the quarter.")
+        detail = _call(api.task_detail, task_id=tid)
+        self.assertEqual(detail["description"], "Close the quarter.")
+        self.assertIn('h("strong", null, "Description: ")', self._web_js())
+
+    def test_gate_fields_reach_the_tasks_payload(self):
+        # Fix 10: the Desktop gate note reads action_tool from the
+        # payload — the field must actually arrive on /approvals and
+        # /tasks rows (Stage 1 records it at create/approve time).
+        run_id = self.make_run()
+        out = _call(api.create_task_route, body={
+            "run_id": run_id, "seat": "CFO", "title": "Sign the NDA",
+            "approval_required": True, "tool_name": "ceo_decision_log",
+            "arguments": {"decision": "sign the vendor NDA"}})
+        self.assertEqual(out["action_tool"], "ceo_decision_log")
+        self.assertTrue(out["action_args_hash"])
+        self.assertNotIn("sign the vendor NDA", json.dumps(out))
+        pending = _call(api.approvals)["pending"]
+        self.assertEqual(pending[0]["action_tool"], "ceo_decision_log")
+        listed = _call(api.list_tasks)["tasks"]
+        self.assertEqual(listed[0]["action_tool"], "ceo_decision_log")
+        # And the Desktop gate note reads that field.
+        self.assertIn("task.action_tool", self._desktop_js())
+        self.assertIn("one-time ticket for", self._desktop_js())
+
+    def test_desktop_org_renders_the_recursive_tree(self):
+        # Fix 3: Desktop reads roster.org and recurses over children
+        # (same shape as the web OrgNode), instead of head + flat list.
+        js = self._desktop_js()
+        self.assertIn("roster.org", js)
+        self.assertIn("OrgTreeNode", js)
+        self.assertIn("node.children", js)
+        self.assertNotIn("restSeats", js)
+        # The tree the backend returns is the same one web renders.
+        roster = _call(api.roster)
+        self.assertEqual(roster["org"]["root"]["seat"], roster["head_seat"])
+        self.assertEqual(len(roster["org"]["root"]["children"]), 7)
+
+    def test_desktop_org_note_follows_snapshot_loaded(self):
+        # Fix 4: the "loaded from config" sentence is conditional.
+        js = self._desktop_js()
+        self.assertIn("snapshot_loaded", js)
+        self.assertIn("No install config seen yet", js)
+        roster = _call(api.roster)
+        self.assertFalse(roster["snapshot_loaded"])
+
+    def test_desktop_task_rows_carry_owner_due_and_overdue(self):
+        # Fix 6: TaskRow shows owner / due date / Overdue badge with the
+        # web's rule (non-terminal, due before today).
+        js = self._desktop_js()
+        self.assertIn("function isOverdue", js)
+        self.assertIn("Overdue", js)
+        self.assertIn("task.owner", js)
+        self.assertIn("due ${task.due_date}", js)
+
+    def test_desktop_detail_fetches_the_same_fields_as_web(self):
+        # Fix 8: expanding a Desktop row fetches GET /tasks/{id} and the
+        # detail endpoint carries every field the web TaskDetail shows.
+        # (No gap: nothing web shows is missing from the endpoint.)
+        run_id = self.make_run()
+        tid = self.make_task(run_id, description="Close the quarter.",
+                             due_date="2026-12-31")
+        self.walk(tid, "approved", "assigned", "running", "completed")
+        detail = _call(api.task_detail, task_id=tid)
+        for key in ("status", "seat", "owner", "model_route", "due_date",
+                    "created_at", "started_at", "completed_at",
+                    "approved_by", "retry_count", "description",
+                    "execution", "dependencies", "dependencies_met",
+                    "history"):
+            self.assertIn(key, detail, "Desktop detail renders %s" % key)
+        self.assertTrue(detail["history"])
+        js = self._desktop_js()
+        self.assertIn("TaskDetailView", js)
+        self.assertIn("`/tasks/${encodeURIComponent(taskId(task))}`", js)
+
+    def test_desktop_assign_is_a_seat_dropdown(self):
+        # Fix 9: Desktop assign uses a seat <select> fed by the roster,
+        # not a free-text owner input.
+        js = self._desktop_js()
+        self.assertIn("seatOptions.map((s) => jsx('option'", js)
+        self.assertNotIn("placeholder: 'Assign to…'", js)
+        # ApprovalsPanel receives the roster seats to feed the dropdown.
+        self.assertIn(
+            "seats: (data.roster.data && data.roster.data.seats) || []", js)
+
+    def test_micro_drift_labels_colors_and_empty_text(self):
+        # Micro-drift: blocked/failed labels distinct; completed and
+        # verified pills differ in color; history empty text matches web.
+        js = self._desktop_js()
+        self.assertIn("blocked: 'Blocked'", js)
+        self.assertIn("failed: 'Failed'", js)
+        self.assertIn("verified: PAL.goldDeep", js)
+        self.assertIn("completed: PAL.green", js)
+        self.assertIn("No recorded activity yet.", js)
+        self.assertNotIn("No history yet.", js)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -426,6 +426,26 @@ def approvals():
     }
 
 
+@router.get("/gate-decisions")
+def gate_decisions(limit: int = 50):
+    """The Type 1 gate's audit log, newest first — what the gate WOULD
+    have stopped (warn mode) and what it allowed on a ticket. Same shape
+    as /activity's history rows. Only hashes are ever returned, never
+    argument values."""
+    _require_db()
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be an integer from 0 to 100.")
+    try:
+        decisions = _tasks.get_gate_decisions(limit=limit)
+    except (sqlite3.Error, FileNotFoundError, OSError):
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    return {
+        "generated_at": _now_iso(),
+        "decisions": decisions,
+        "count": len(decisions),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Write routes (POST) — the dashboard acting for the owner.
 #
@@ -497,6 +517,12 @@ def create_task_route(body: dict):
     metadata = body.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):
         raise HTTPException(status_code=400, detail="metadata must be a JSON object.")
+    # Stage 1 gate: optional exact action this task will execute. Stored
+    # as tool name + argument hash only; raw values are never stored.
+    tool_name = _optional_text(body, "tool_name")
+    arguments = body.get("arguments")
+    if arguments is not None and not isinstance(arguments, dict):
+        raise HTTPException(status_code=400, detail="arguments must be a JSON object.")
     try:
         if _tasks.get_task_run(run_id) is None:
             raise HTTPException(status_code=400, detail="unknown run_id")
@@ -513,6 +539,8 @@ def create_task_route(body: dict):
             risk_flags=risk_flags or [],
             parent_task_id=parent_task_id,
             metadata=metadata or {},
+            tool_name=tool_name,
+            arguments=arguments,
         )
         task = _tasks.get_task(task_id)
     except HTTPException:
@@ -525,20 +553,41 @@ def create_task_route(body: dict):
 
 
 @router.post("/tasks/{task_id}/approve")
-def approve_task_route(task_id: str):
+def approve_task_route(task_id: str, body: Optional[dict] = None):
     _require_db()
     task = _write_task_or_404(task_id)
     if not task.get("approval_required"):
         raise HTTPException(status_code=409, detail="Task does not require approval (not a Type 1 task)")
     if task.get("status") != "proposed":
         raise HTTPException(status_code=409, detail="Task is in '%s' state, not 'proposed'. Can only approve proposed tasks." % task.get("status"))
+    # Stage 1 gate: optional exact action (tool_name + arguments) in the
+    # body. When given here it is recorded on the task and a one-time
+    # ticket is minted for it; when the task already names an action,
+    # that one is used instead. Raw values are never stored — only the hash.
+    tool_name = None
+    arguments = None
+    if body is not None:
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="request body must be a JSON object.")
+        tool_name = _optional_text(body, "tool_name")
+        arguments = body.get("arguments")
+        if arguments is not None and not isinstance(arguments, dict):
+            raise HTTPException(status_code=400, detail="arguments must be a JSON object.")
     try:
-        ok = _tasks.approve_task(task_id, "owner", note="Type 1 approval granted (dashboard)")
+        ok = _tasks.approve_task(task_id, "owner", note="Type 1 approval granted (dashboard)",
+                                 tool_name=tool_name, arguments=arguments, minted_via="dashboard")
     except sqlite3.Error:
         raise HTTPException(status_code=503, detail="task registry unavailable")
     if not ok:
         raise HTTPException(status_code=409, detail="Task could not be approved (it may have moved already)")
-    return _public_task(_tasks.get_task(task_id))
+    stored = _tasks.get_task(task_id)
+    public = _public_task(stored)
+    action_tool = stored.get("action_tool") if stored else None
+    action_hash = stored.get("action_args_hash") if stored else None
+    token = _tasks.get_live_token(task_id, action_tool, action_hash) if action_tool and action_hash else None
+    public["token_minted"] = bool(token)
+    public["token_id"] = token.get("token_id") if token else None
+    return public
 
 
 @router.post("/tasks/{task_id}/reject")

@@ -122,21 +122,31 @@ const TAB_LABELS = [
   ['approvals', 'Approvals']
 ]
 
+// Distinct labels per status (web parity): blocked and failed are
+// different states and must not share one label.
+const STATUS_LABEL = {
+  proposed: 'Proposed', approved: 'Approved', assigned: 'Assigned',
+  running: 'Running', blocked: 'Blocked', completed: 'Completed',
+  verified: 'Verified', failed: 'Failed', rejected: 'Rejected'
+}
+
 function statusLabel(s) {
-  return s === 'blocked' || s === 'failed' ? 'Blocked / failed' : s.charAt(0).toUpperCase() + s.slice(1)
+  if (STATUS_LABEL[s]) return STATUS_LABEL[s]
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Unknown'
 }
 
 // Status pill colors (spec §6, on the PAL palette): proposed muted,
 // approved gold, assigned teal, running green, blocked amber, failed red,
-// completed/verified green, rejected muted. The label text is always
-// present — color never carries status alone.
+// completed green, verified deep gold (same label text, different color —
+// never the same pill for two states), rejected muted. The label text is
+// always present — color never carries status alone.
 const STATUS_COLORS = {
   proposed: PAL.muted,
   approved: PAL.gold,
   assigned: PAL.teal,
   running: PAL.green,
   completed: PAL.green,
-  verified: PAL.green,
+  verified: PAL.goldDeep,
   blocked: PAL.amber,
   failed: PAL.red,
   rejected: PAL.muted
@@ -147,6 +157,85 @@ function StatusPill({ status }) {
   return jsx('span', {
     style: { border: `1px solid ${color}`, color, padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', borderRadius: '999px', background: 'rgba(6, 11, 22, 0.4)' },
     children: statusLabel(status)
+  })
+}
+
+const TERMINAL = { completed: true, verified: true, failed: true, rejected: true }
+
+// Same overdue rule as the web tab: a non-terminal task whose due date
+// is before today. No due date, no overdue badge.
+function isOverdue(task) {
+  if (!task || !task.due_date || TERMINAL[task.status]) return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const due = new Date(task.due_date + 'T00:00:00')
+  return !Number.isNaN(due.getTime()) && due < today
+}
+
+// Full task detail, same fields the web TaskDetail shows: status, seat,
+// owner, route, due, created/started/completed, approved-by, retries,
+// description, the full delegated-execution record, dependencies, and
+// execution history. `task` is the list row (already carries everything
+// except history/dependencies); `detail` is the GET /tasks/{id} payload
+// once fetched (null while loading, {_error} on failure). Nothing is
+// invented: missing values render "unknown" / "none".
+function TaskDetailView({ task, detail, detailLoading }) {
+  const d = { ...task, ...(detail && !detail._error ? detail : {}) }
+  const ex = d.execution || null
+  const route = (ex && ex.route) || {}
+  const toks = (ex && ex.tokens) || {}
+  return jsxs('div', {
+    style: { marginTop: '8px', fontSize: '0.85rem', color: PAL.muted, display: 'flex', flexDirection: 'column', gap: '2px' },
+    children: [
+      jsxs('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' }, children: [jsx(StatusPill, { status: d.task_status || d.status }), jsx('span', { children: `${d.seat || 'unknown'} · updated ${relTime(d.updated_at)}` })] }),
+      jsx('div', { children: `Owner: ${d.owner || 'unassigned'}` }),
+      jsx('div', { children: `Route: ${d.model_route || 'not routed'}` }),
+      jsx('div', { children: `Due: ${d.due_date || 'none'}` }),
+      jsx('div', { children: `Created: ${relTime(d.created_at)}` }),
+      jsx('div', { children: `Started: ${relTime(d.started_at)}` }),
+      jsx('div', { children: `Completed: ${relTime(d.completed_at)}` }),
+      jsx('div', { children: `Approved by: ${d.approved_by || '—'}` }),
+      jsx('div', { children: `Retries: ${d.retry_count == null ? 0 : d.retry_count}` }),
+      jsx('div', { children: `Description: ${d.description || 'none'}` }),
+      jsx('h4', { style: { margin: '8px 0 2px', color: PAL.text }, children: 'Delegated execution' }),
+      !ex ? jsx('div', { children: 'Not run yet — no delegated execution recorded for this task.' }) : jsxs('div', {
+        style: { display: 'flex', flexDirection: 'column', gap: '2px' },
+        children: [
+          jsx('div', { children: `Requested route: ${d.model_route || 'not routed'}` }),
+          jsx('div', { children: `Ran on: ${route.refused ? 'route refused' : ((route.provider || route.model) ? `${route.provider || 'unknown provider'} / ${route.model || 'unknown model'}` : 'unknown')}` }),
+          jsx('div', { children: `Route label: ${route.label || 'unknown'}` }),
+          jsx('div', { children: `Backend: ${route.backend || 'unknown'}` }),
+          jsx('div', { children: `Reasoning effort: ${route.reasoning_effort || 'unknown'}` }),
+          jsx('div', { children: `Service tier: ${route.service_tier || 'unknown'}` }),
+          route.fallback_activated ? jsx('span', { style: { color: PAL.gold }, children: 'fallback provider took over' }) : null,
+          jsx('div', { children: `Tokens in / out: ${(toks.input == null ? 'unknown' : String(toks.input))} / ${(toks.output == null ? 'unknown' : String(toks.output))}` }),
+          jsx('div', { children: `Cost: ${ex.cost_usd == null ? 'unknown' : `$${ex.cost_usd}${ex.cost_status ? ` (${ex.cost_status})` : ''}`}` }),
+          jsx('div', { children: `Duration: ${ex.duration_seconds == null ? 'unknown' : `${ex.duration_seconds}s`}` }),
+          jsx('div', { children: `API calls: ${ex.api_calls == null ? 'unknown' : String(ex.api_calls)}` }),
+          ex.exit_reason ? jsx('div', { children: `Exit: ${ex.exit_reason}` }) : null,
+          ex.failure_reason ? jsx('div', { children: `Failure: ${ex.failure_reason}` }) : null,
+          jsx('div', { children: `Recorded: ${relTime(ex.recorded_at)}` })
+        ]
+      }),
+      detailLoading || !detail ? jsx('div', { children: 'Dependencies: Loading…' })
+        : detail._error ? jsx('div', { style: { color: PAL.red }, children: `Could not load dependencies: ${detail._error}` })
+        : jsxs('div', {
+          children: [
+            jsx('span', { children: `Dependencies: ${(detail.dependencies || []).length ? detail.dependencies.join(', ') : 'none'}` }),
+            detail.dependencies_met === false ? jsx('span', { style: { color: PAL.gold, marginLeft: '6px' }, children: 'blocked by dependency' }) : null
+          ]
+        }),
+      jsx('h4', { style: { margin: '8px 0 2px', color: PAL.text }, children: 'Execution history' }),
+      detailLoading || !detail ? jsx('div', { children: 'Loading detail…' })
+        : detail._error ? jsx('div', { style: { color: PAL.red }, children: `Could not load history: ${detail._error}` })
+        : (detail.history || []).length ? jsx('div', {
+          style: { display: 'flex', flexDirection: 'column', gap: '2px', borderLeft: `1px solid ${PAL.teal}`, paddingLeft: '10px' },
+          children: detail.history.map((ev, i) => jsx('div', {
+            key: i,
+            children: `${ev.from_status || '—'} → ${ev.to_status} · ${ev.actor || 'system'} · ${relTime(ev.at)}${ev.note ? ` — ${ev.note}` : ''}`
+          }))
+        }) : jsx('div', { children: 'No recorded transitions yet — the task has not moved.' })
+    ]
   })
 }
 
@@ -185,8 +274,11 @@ function SummaryStrip({ summary }) {
     style: { display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' },
     children: [
       jsx(StatBox, { value: summary.tasks_total ?? 0, label: 'Tasks', color: PAL.gold, icon: '▤' }),
-      jsx(StatBox, { value: summary.running ?? 0, label: 'Running', color: PAL.teal, icon: '▶' }),
-      jsx(StatBox, { value: summary.stuck ?? 0, label: 'Blocked / failed', color: PAL.red, icon: '⚠' }),
+      jsx(StatBox, { value: byStatus.running ?? 0, label: 'Running', color: PAL.teal, icon: '▶' }),
+      // "Blocked / failed" is ALL blocked + failed tasks (web parity) —
+      // NOT summary.stuck, which is only the retry-exhausted subset.
+      // `stuck` stays the Activity-panel concept only.
+      jsx(StatBox, { value: (byStatus.blocked || 0) + (byStatus.failed || 0), label: 'Blocked / failed', color: PAL.red, icon: '⚠' }),
       jsx(StatBox, { value: summary.pending_approvals ?? 0, label: 'Pending approval', color: PAL.gold, icon: '◷' }),
       jsx(StatBox, { value: byStatus.verified ?? 0, label: 'Verified', color: PAL.green, icon: '✓' }),
       jsx(StatBox, { value: summary.total_runs ?? 0, label: 'Runs', color: PAL.teal, icon: '▸' })
@@ -325,7 +417,7 @@ function CeoPackPage() {
       tab === 'org' ? jsx(OrgChart, { roster: data.roster.data, tasks: data.tasks.data, selectedSeat, onSelectSeat: setSelectedSeat, changed }) : null,
       tab === 'activity' ? jsx(ActivityPanel, { activity: data.activity.data, changed }) : null,
       tab === 'board' ? jsx(TaskBoard, { tasks: data.tasks.data, roster: data.roster.data, runs: data.runs.data, writes, busy: writeBusy, changed }) : null,
-      tab === 'approvals' ? jsx(ApprovalsPanel, { approvals: data.approvals.data, writes, busy: writeBusy, changed }) : null
+      tab === 'approvals' ? jsx(ApprovalsPanel, { approvals: data.approvals.data, writes, busy: writeBusy, changed, seats: (data.roster.data && data.roster.data.seats) || [] }) : null
     ]
   })
 }
@@ -434,29 +526,51 @@ function LiveActivityPanel({ roster }) {
   })
 }
 
+// Recursive org tree (web parity): renders roster.org the same way the
+// web OrgNode does, so departments and subordinate agents plug in here
+// without another redesign. Today the root is the head seat and its
+// children are the other seats; deeper nesting renders the same way.
+function OrgTreeNode({ node, selectedSeat, onSelectSeat }) {
+  const children = node.children || []
+  return jsxs('div', {
+    style: { display: 'flex', flexDirection: 'column', alignItems: 'center' },
+    children: [
+      jsx(SeatCard, { node, selected: selectedSeat === node.seat, onSelect: onSelectSeat }),
+      children.length ? jsxs('div', {
+        style: { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' },
+        children: [
+          jsx('div', { style: { width: '1px', height: '16px', background: PAL.line }, children: '' }),
+          jsxs('div', {
+            style: { display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' },
+            children: children.map((c) => jsx(OrgTreeNode, { node: c, selectedSeat, onSelectSeat, key: c.seat }))
+          })
+        ]
+      }) : null
+    ]
+  })
+}
+
 function OrgChart({ roster, tasks, selectedSeat, onSelectSeat, changed }) {
   if (!roster) return jsx('div', { style: { color: PAL.text }, children: 'No roster yet.' })
-  const seats = roster.seats || []
-  const head = seats.find((s) => s.seat === roster.head_seat) || seats[0]
-  const restSeats = seats.filter((s) => s !== head)
+  const root = (roster.org && roster.org.root) || null
   const seatTasks = selectedSeat && tasks
     ? (tasks.tasks || []).filter((t) => t.seat === selectedSeat)
     : []
+  // Same conditional as the web note: the "loaded from config" sentence
+  // is only true when a roster snapshot was actually applied.
+  const configNote = roster.snapshot_loaded
+    ? 'Roster loaded from the applied install config.'
+    : 'No install config seen yet — showing the default roster.'
   return jsxs('div', {
     children: [
-      jsx('p', { style: { color: PAL.muted }, children: 'Reporting shown by the plugin’s accountability model — the head seat holds priorities. Departments and custom reporting lines plug in here when they exist; none are shown until they do. Roster loaded from the applied install config.' }),
+      jsx('p', { style: { color: PAL.muted }, children: `Reporting shown by the plugin's accountability model — the head seat holds priorities. Departments and custom reporting lines plug in here when they exist; none are shown until they do. ${configNote}` }),
       jsxs('div', {
         style: { display: 'flex', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' },
         children: [
           jsxs('div', {
             style: { flex: '1 1 420px', minWidth: 0 },
             children: [
-              head ? jsx('div', { style: { display: 'flex', justifyContent: 'center', marginBottom: '12px' }, children: jsx(SeatCard, { node: head, selected: selectedSeat === head.seat, onSelect: onSelectSeat }) }) : null,
-              restSeats.length ? jsx('div', { style: { width: '1px', height: '16px', background: PAL.line, margin: '0 auto 12px' }, children: '' }) : null,
-              jsxs('div', {
-                style: { display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' },
-                children: restSeats.map((s) => jsx(SeatCard, { node: s, selected: selectedSeat === s.seat, onSelect: onSelectSeat, key: s.seat }))
-              })
+              root ? jsx(OrgTreeNode, { node: root, selectedSeat, onSelectSeat }) : jsx('p', { style: { color: PAL.muted }, children: 'No org tree yet.' })
             ]
           }),
           jsx(LiveActivityPanel, { roster })
@@ -525,7 +639,7 @@ function ActivityPanel({ activity, changed }) {
       }),
       jsx('h3', { style: { color: PAL.text }, children: 'Recent execution history' }),
       history.length === 0
-        ? jsx('p', { style: { color: PAL.muted }, children: 'No history yet.' })
+        ? jsx('p', { style: { color: PAL.muted }, children: 'No recorded activity yet.' })
         : jsx('div', {
           style: { display: 'flex', flexDirection: 'column', gap: '4px', borderLeft: `1px solid ${PAL.teal}`, paddingLeft: '16px' },
           children: history.map((h, i) => jsx('div', {
@@ -543,7 +657,28 @@ function ActivityPanel({ activity, changed }) {
   })
 }
 
+// Org + activity rows: same collapsed fields as the web TaskCard
+// (owner, due date, Overdue badge) and the same expand-to-detail
+// behavior — clicking a row used to go nowhere; it now opens the full
+// detail (fetched once from GET /tasks/{id}) like the web tab.
 function TaskRow({ task, changed }) {
+  const [open, setOpen] = useState(false)
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  async function toggleOpen() {
+    const next = !open
+    setOpen(next)
+    if (next && !detail && !detailLoading) {
+      setDetailLoading(true)
+      try {
+        setDetail(await api(`/tasks/${encodeURIComponent(taskId(task))}`))
+      } catch (err) {
+        setDetail({ _error: err && err.message ? err.message : String(err) })
+      } finally {
+        setDetailLoading(false)
+      }
+    }
+  }
   return jsxs('div', {
     style: {
       border: `1px solid ${changed ? PAL.teal : PAL.line}`,
@@ -553,25 +688,56 @@ function TaskRow({ task, changed }) {
       color: PAL.text
     },
     children: [
-      jsx('div', { style: { fontWeight: 600 }, children: task.title }),
+      jsx('div', {
+        onClick: toggleOpen,
+        style: { fontWeight: 600, cursor: 'pointer' },
+        children: `${open ? '▾' : '▸'} ${task.title}`
+      }),
       jsxs('div', {
-        style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: PAL.muted, alignItems: 'center' },
+        style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: PAL.muted, alignItems: 'center', flexWrap: 'wrap' },
         children: [
           jsx(StatusPill, { status: task.status }),
           task.approval_required ? jsx('span', { style: { color: PAL.gold }, children: 'TYPE 1' }) : null,
+          task.owner ? jsx('span', { children: task.owner }) : null,
+          task.due_date ? jsx('span', { children: `due ${task.due_date}` }) : null,
+          isOverdue(task) ? jsx('span', { style: { border: `1px solid ${PAL.red}`, color: PAL.red, padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', borderRadius: '999px' }, children: 'Overdue' }) : null,
           jsx('span', { children: `${task.seat} · updated ${relTime(task.updated_at)}` })
         ]
-      })
+      }),
+      open ? jsx(TaskDetailView, { task, detail, detailLoading }) : null
     ]
   })
 }
 
-function TaskCard({ task, writes, busy, changed, showPending }) {
+function TaskCard({ task, writes, busy, changed, showPending, seats }) {
   const [assignee, setAssignee] = useState(task.seat || '')
   const [open, setOpen] = useState(false)
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
   const canApprove = task.status === 'proposed' && task.approval_required
   const canAssign = task.status === 'approved' || task.status === 'proposed'
-  const exec = task.execution || null
+  const seatOptions = seats || []
+  // Stage 1 gate note (web ApprovalRow parity): whether approving mints
+  // a one-time ticket for the recorded action or is approval-only. The
+  // task's action_tool / action_args_hash arrive in the payload from
+  // GET /approvals (and /tasks) — same fields the web tab reads.
+  const gateNote = task.action_tool
+    ? `Approving mints a one-time ticket for ${task.action_tool} (30 min, single use). Warn mode only — nothing is enforced yet.`
+    : 'This task names no action, so approving it mints no ticket — approval only. Warn mode only — nothing is enforced yet.'
+  async function toggleOpen() {
+    const next = !open
+    setOpen(next)
+    if (next && !detail && !detailLoading) {
+      setDetailLoading(true)
+      try {
+        setDetail(await api(`/tasks/${encodeURIComponent(taskId(task))}`))
+      } catch (err) {
+        setDetail({ _error: err && err.message ? err.message : String(err) })
+      } finally {
+        setDetailLoading(false)
+      }
+    }
+  }
   return jsxs('div', {
     style: {
       border: `1px solid ${changed ? PAL.teal : PAL.line}`,
@@ -583,26 +749,22 @@ function TaskCard({ task, writes, busy, changed, showPending }) {
     children: [
       showPending ? jsx('span', { style: { border: `1px solid ${PAL.gold}`, color: PAL.gold, padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', borderRadius: '999px', background: 'rgba(232, 182, 76, 0.12)' }, children: 'PENDING' }) : null,
       jsx('div', {
-        onClick: () => setOpen(!open),
+        onClick: toggleOpen,
         style: { fontWeight: 600, cursor: 'pointer', color: PAL.text },
         children: `${open ? '▾' : '▸'} ${task.title}`
       }),
       jsxs('div', {
-        style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: PAL.muted, alignItems: 'center' },
+        style: { display: 'flex', gap: '8px', marginTop: '4px', fontSize: '0.85rem', color: PAL.muted, alignItems: 'center', flexWrap: 'wrap' },
         children: [
           jsx(StatusPill, { status: task.status }),
           task.approval_required ? jsx('span', { style: { color: PAL.gold }, children: 'TYPE 1' }) : null,
+          task.owner ? jsx('span', { children: task.owner }) : null,
+          task.due_date ? jsx('span', { children: `due ${task.due_date}` }) : null,
+          isOverdue(task) ? jsx('span', { style: { border: `1px solid ${PAL.red}`, color: PAL.red, padding: '1px 8px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', borderRadius: '999px' }, children: 'Overdue' }) : null,
           jsx('span', { children: `${task.seat} · updated ${relTime(task.updated_at)}` })
         ]
       }),
-      open ? jsxs('div', {
-        style: { marginTop: '8px', fontSize: '0.85rem', color: PAL.muted, display: 'flex', flexDirection: 'column', gap: '2px' },
-        children: [
-          task.description ? jsx('div', { children: task.description }) : null,
-          jsx('div', { children: `Created ${relTime(task.created_at)}${task.due_date ? ` · due ${task.due_date}` : ''}${task.approved_by ? ` · approved by ${task.approved_by}` : ''}` }),
-          exec ? jsx('div', { children: `Run: ${exec.status || '—'}${exec.cost_usd != null ? ` · $${exec.cost_usd}` : ''}${exec.cost_status === 'unknown' ? ' · cost unknown' : ''}${exec.duration_seconds != null ? ` · ${exec.duration_seconds}s` : ''}` }) : null
-        ]
-      }) : null,
+      open ? jsx(TaskDetailView, { task, detail, detailLoading }) : null,
       jsxs('div', {
         style: { display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' },
         children: [
@@ -621,22 +783,26 @@ function TaskCard({ task, writes, busy, changed, showPending }) {
           canAssign ? jsxs('span', {
             style: { display: 'inline-flex', gap: '6px', alignItems: 'center' },
             children: [
-              jsx('input', {
+              jsx('select', {
                 value: assignee,
                 onChange: (e) => setAssignee(e.target.value),
-                placeholder: 'Assign to…',
-                style: { padding: '4px 8px', border: `1px solid ${PAL.line}`, background: PAL.bg1, color: PAL.text }
+                style: { padding: '4px 8px', border: `1px solid ${PAL.line}`, background: PAL.bg1, color: PAL.text },
+                children: [
+                  jsx('option', { value: '', key: 'none', children: 'Assign to…' }),
+                  ...seatOptions.map((s) => jsx('option', { value: s.seat, key: s.seat, children: `${s.display_name || s.seat} (${s.seat})` }))
+                ]
               }),
               jsx('button', {
-                type: 'button', disabled: busy || !assignee.trim(),
-                onClick: () => writes.assign(taskId(task), assignee.trim()),
+                type: 'button', disabled: busy || !assignee,
+                onClick: () => writes.assign(taskId(task), assignee),
                 style: { padding: '4px 12px', border: `1px solid ${PAL.line}`, background: 'transparent', color: PAL.text, cursor: 'pointer', borderRadius: '4px' },
                 children: 'Assign'
               })
             ]
           }) : null
         ]
-      })
+      }),
+      showPending ? jsx('p', { style: { color: PAL.muted, fontSize: '0.85rem', margin: '8px 0 0' }, children: gateNote }) : null
     ]
   })
 }
@@ -646,6 +812,8 @@ function TaskBoard({ tasks, roster, runs, writes, busy, changed }) {
   const [seat, setSeat] = useState('')
   const [run, setRun] = useState('')
   const [type1, setType1] = useState(false)
+  const [dueDate, setDueDate] = useState('')
+  const [description, setDescription] = useState('')
   const [seatFilter, setSeatFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
@@ -685,10 +853,16 @@ function TaskBoard({ tasks, roster, runs, writes, busy, changed }) {
 
   async function create() {
     if (!canCreate) return
-    const out = await writes.create({ run_id: run, seat, title: title.trim(), approval_required: type1 })
+    // due_date / description are optional: undefined keys are dropped
+    // by JSON serialization, so the backend sees them only when given. A
+    // bad due date is refused by the backend (400) and the page-level
+    // write error shows the server's detail string — never silent.
+    const out = await writes.create({ run_id: run, seat, title: title.trim(), approval_required: type1, due_date: dueDate || undefined, description: description.trim() || undefined })
     if (out) {
       setTitle('')
       setType1(false)
+      setDueDate('')
+      setDescription('')
     }
   }
 
@@ -731,6 +905,16 @@ function TaskBoard({ tasks, roster, runs, writes, busy, changed }) {
                   jsx('input', { type: 'checkbox', checked: type1, onChange: (e) => setType1(e.target.checked) }),
                   jsx('span', { children: 'Type 1 (needs owner approval)' })
                 ]
+              }),
+              jsx('input', {
+                type: 'date', value: dueDate, onChange: (e) => setDueDate(e.target.value),
+                title: 'Due date (optional)',
+                style: { padding: '6px 10px', border: `1px solid ${PAL.line}`, background: PAL.bg1, color: PAL.text }
+              }),
+              jsx('textarea', {
+                value: description, onChange: (e) => setDescription(e.target.value),
+                placeholder: 'Description (optional)…', rows: 2,
+                style: { flex: '1 1 100%', padding: '6px 10px', border: `1px solid ${PAL.line}`, background: PAL.bg1, color: PAL.text, fontFamily: 'inherit' }
               }),
               jsx('button', {
                 type: 'button', disabled: busy || !canCreate, onClick: create,
@@ -785,13 +969,13 @@ function TaskBoard({ tasks, roster, runs, writes, busy, changed }) {
           ? jsx('p', { style: { color: PAL.muted }, children: 'No tasks in this view.' })
           : jsx('div', {
             style: { display: 'flex', flexDirection: 'column', gap: '8px' },
-            children: filtered.map((t) => jsx(TaskCard, { task: t, writes, busy, key: taskId(t), changed: changed?.tasks?.[taskId(t)] }))
+            children: filtered.map((t) => jsx(TaskCard, { task: t, writes, busy, key: taskId(t), changed: changed?.tasks?.[taskId(t)], seats }))
           })
     ]
   })
 }
 
-function ApprovalsPanel({ approvals, writes, busy, changed }) {
+function ApprovalsPanel({ approvals, writes, busy, changed, seats }) {
   if (!approvals) return jsx('div', { style: { color: PAL.text }, children: 'No approvals yet.' })
   const pending = approvals.pending || []
   const history = approvals.history || []
@@ -802,7 +986,7 @@ function ApprovalsPanel({ approvals, writes, busy, changed }) {
         ? jsx('p', { style: { color: PAL.muted }, children: 'No pending owner approvals.' })
         : jsx('div', {
           style: { display: 'flex', flexDirection: 'column', gap: '8px' },
-          children: pending.map((t) => jsx(TaskCard, { task: t, writes, busy, key: taskId(t), changed: changed?.tasks?.[taskId(t)], showPending: true }))
+          children: pending.map((t) => jsx(TaskCard, { task: t, writes, busy, key: taskId(t), changed: changed?.tasks?.[taskId(t)], showPending: true, seats: seats || [] }))
         }),
       jsx('h3', { style: { color: PAL.text }, children: 'Approval history' }),
       history.length === 0

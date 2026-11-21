@@ -665,6 +665,15 @@ def ceo_task_create(args, **kwargs):
     parent_task_id = args.get("parent_task_id")
     metadata = args.get("metadata") or {}
     description = args.get("description", "")
+    # Stage 1 gate: optional exact action this task will execute. The
+    # tool name + arguments are stored as name + hash only; raw argument
+    # values are never stored.
+    tool_name = args.get("tool_name")
+    if tool_name is not None and not isinstance(tool_name, str):
+        return _err("tool_name must be a string.")
+    arguments = args.get("arguments")
+    if arguments is not None and not isinstance(arguments, dict):
+        return _err("arguments must be an object.")
     
     task_id = tasks.create_task(
         run_id=run_id,
@@ -679,8 +688,17 @@ def ceo_task_create(args, **kwargs):
         risk_flags=risk_flags,
         parent_task_id=parent_task_id,
         metadata=metadata,
+        tool_name=tool_name,
+        arguments=arguments,
     )
     
+    # Stage 1 gate: the stored row is the truth about whether the exact
+    # action was recorded (invalid tool_name / arguments are ignored).
+    stored = tasks.get_task(task_id)
+    action_tool = (stored or {}).get("action_tool")
+    note = "Task created with status 'proposed'. Type 1 tasks require owner approval via ceo_task_approve."
+    if action_tool:
+        note += " Exact action recorded — approving will mint a one-time ticket for it."
     return _ok({
         "task_id": task_id,
         "run_id": run_id,
@@ -688,7 +706,8 @@ def ceo_task_create(args, **kwargs):
         "title": title,
         "task_status": "proposed",
         "approval_required": approval_required,
-        "note": "Task created with status 'proposed'. Type 1 tasks require owner approval via ceo_task_approve."
+        "action_tool": action_tool,
+        "note": note,
     }, ignored=_ignored("ceo_task_create", args))
 
 
@@ -818,15 +837,44 @@ def ceo_task_approve(args, **kwargs):
     if task.get("status") != "proposed":
         return _err(f"Task is in '{task.get('status')}' state, not 'proposed'. Can only approve proposed tasks.")
     
-    ok = tasks.approve_task(task_id, approved_by)
+    # Stage 1 gate: optional exact action (tool_name + arguments). When
+    # given here it is recorded on the task and a one-time ticket is
+    # minted for it; when the task already names an action, that one is
+    # used instead. Raw argument values are never stored — only the hash.
+    tool_name = args.get("tool_name")
+    if tool_name is not None and not isinstance(tool_name, str):
+        return _err("tool_name must be a string.")
+    arguments = args.get("arguments")
+    if arguments is not None and not isinstance(arguments, dict):
+        return _err("arguments must be an object.")
+    
+    ok = tasks.approve_task(task_id, approved_by, tool_name=tool_name, arguments=arguments, minted_via="chat")
     if not ok:
         return _err("Failed to approve task")
     
+    # The stored row is the truth about what was minted: a ticket exists
+    # only when the approved task names an exact action.
+    stored = tasks.get_task(task_id) or {}
+    action_tool = stored.get("action_tool")
+    action_hash = stored.get("action_args_hash")
+    token = tasks.get_live_token(task_id, action_tool, action_hash) if action_tool and action_hash else None
+    if token:
+        note = ("Task approved. One-time ticket minted for the exact action "
+                f"({action_tool}) — 30 minutes, single use. Assign owner/profile "
+                "via ceo_task_assign, then it can be executed.")
+    else:
+        note = ("Task approved. No action was recorded, so no approval ticket "
+                "was minted — approving alone authorizes nothing. Record the "
+                "exact action (tool_name + arguments) when approving. Assign "
+                "owner/profile via ceo_task_assign.")
     return _ok({
         "task_id": task_id,
         "task_status": "approved",
         "approved_by": approved_by,
-        "note": "Task approved. Assign owner/profile via ceo_task_assign, then it can be executed."
+        "action_tool": action_tool,
+        "token_minted": bool(token),
+        "token_id": token.get("token_id") if token else None,
+        "note": note,
     }, ignored=_ignored("ceo_task_approve", args))
 
 

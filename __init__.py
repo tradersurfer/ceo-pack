@@ -292,6 +292,17 @@ def register(ctx):
 
     ctx.register_hook("post_tool_call", _on_post_tool_call)
 
+    # --- Type 1 gate, Stage 1 (warn/observe only) ---
+    # pre_tool_call observes every tool call and logs what the gate WOULD
+    # have stopped. It never blocks and never consumes a ticket in Stage 1.
+    # Registration failure must not break the rest of the plugin.
+    try:
+        from . import gate as _gate
+        ctx.register_hook("pre_tool_call", _gate._on_pre_tool_call)
+        logger.info("CEO Pack Type 1 gate registered (Stage 1, warn/observe only)")
+    except Exception:
+        logger.exception("CEO Pack: pre_tool_call gate registration failed")
+
     # --- Skills ---
     skills_dir = Path(__file__).parent / "skills"
     for name in _SKILLS:

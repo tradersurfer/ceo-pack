@@ -158,6 +158,7 @@ The agent runs on whatever model you already selected in Hermes — the plugin n
 |---|---|
 | **Nemotron 3 Ultra free** (`nvidia/nemotron-3-ultra-550b-a55b:free`) | CEO default — 550B, 1M context, orchestration |
 | **Nemotron 3.5 Lightning free** (`nvidia/nemotron-3.5-lightning:free`) | Fast, narrow worker jobs — never the CEO seat |
+| **Ling 3.2 Flash free** (`inclusionai/ling-3.2-flash:free`) | Second free worker — 1M context, tools work |
 | Claude Sonnet 5.5 | Paid value, everyday frontier |
 | Claude Opus 5.5 | Paid flagship, high stakes only — override, not default |
 

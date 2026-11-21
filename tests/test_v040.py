@@ -373,7 +373,7 @@ class LingFix(unittest.TestCase):
     def test_bare_ling_not_listed_as_free(self):
         from models import get_model
         worker2 = get_model("free_worker_2")
-        self.assertEqual(worker2["openrouter_id"], "inclusionai/ling-3.1-flash:free")
+        self.assertEqual(worker2["openrouter_id"], "inclusionai/ling-3.2-flash:free")
         self.assertNotIn("zero-priced, no :free suffix", worker2["cost"])
 
 

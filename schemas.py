@@ -112,7 +112,7 @@ CEO_ORCHESTRATE = {
             "goal": {"type": "string"},
             "model_key": {
                 "type": "string",
-                "description": "Optional model choice key: free_default, free_fallback, free_worker, paid_value, paid_flagship.",
+                "description": "Optional model choice key: free_default, free_worker, free_worker_2, paid_value, paid_flagship.",
             },
         },
         "required": ["goal"],
@@ -370,7 +370,7 @@ CEO_RUN_CREATE = {
         "properties": {
             "goal": {"type": "string", "description": "The orchestration goal."},
             "head_seat": {"type": "string", "description": "Seat that owns the run (default CEO)."},
-            "model_key": {"type": "string", "description": "Model choice key: free_default, free_fallback, free_worker, paid_value, paid_flagship."},
+            "model_key": {"type": "string", "description": "Model choice key: free_default, free_worker, free_worker_2, paid_value, paid_flagship."},
         },
         "required": ["goal"],
     },

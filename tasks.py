@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS approval_tokens (
     expires_at TEXT NOT NULL,            -- ISO datetime; token dead after this
     used_at TEXT,                        -- ISO datetime of the single use, NULL until used
     status TEXT NOT NULL DEFAULT 'live', -- live | used | expired | revoked
-    minted_via TEXT NOT NULL             -- "chat" or "dashboard"
+    minted_via TEXT NOT NULL             -- "slash", "dashboard" (or "chat" on old rows)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tokens_tool_hash ON approval_tokens(tool_name, args_hash);
@@ -147,7 +147,18 @@ CREATE TABLE IF NOT EXISTS tool_intents (
 CREATE INDEX IF NOT EXISTS idx_intents_tool_hash ON tool_intents(tool_name, args_hash);
 """
 
-DEFAULT_DB_PATH = Path.home() / ".hermes" / "plugins" / "ceo-pack" / DB_NAME
+def _hermes_home() -> Path:
+    """Active profile's Hermes home, so each profile keeps its own registry."""
+    try:
+        from hermes_constants import get_hermes_home
+        return Path(get_hermes_home())
+    except Exception:
+        import os
+        return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+
+
+def default_db_path() -> Path:
+    return _hermes_home() / "plugins" / "ceo-pack" / DB_NAME
 
 
 def _resolve_db_path(custom_path: Optional[str] = None) -> Path:
@@ -158,7 +169,7 @@ def _resolve_db_path(custom_path: Optional[str] = None) -> Path:
     env_path = os.environ.get("CEO_PACK_TASK_DB")
     if env_path:
         return Path(env_path)
-    return DEFAULT_DB_PATH
+    return default_db_path()
 
 
 @contextmanager
@@ -527,6 +538,10 @@ def move_to_assigned(task_id: str, actor: str = "system", note: str = "", db_pat
         if not row or row["status"] not in ("proposed", "approved"):
             return False
         old_status = row["status"]
+        if old_status == "proposed":
+            gate = conn.execute("SELECT approval_required FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if gate and gate["approval_required"]:
+                return False   # Type 1: only the owner's approval opens this gate
         conn.execute(
             "UPDATE tasks SET status = 'assigned', updated_at = ? WHERE id = ?",
             (now, task_id)
@@ -593,6 +608,9 @@ def try_assign_task(task_id: str, owner: str, model_route: Optional[str] = None,
       refused, owner unchanged, no silent overwrite.
     - "refused": status cannot be assigned (running/blocked/failed or any
       terminal state) — the legal-transition table is the authority.
+    - "awaiting_approval": a Type 1 task (approval_required) that the
+      owner has not approved yet — refused, nothing written. The owner
+      approves in the dashboard or with /task-approve; the model cannot.
     - "not_found": no such task.
     One transaction: the read, the decision, and the write happen together,
     so a concurrent assign cannot slip between the check and the write.
@@ -612,6 +630,8 @@ def try_assign_task(task_id: str, owner: str, model_route: Optional[str] = None,
             return "conflict", dict(row)
         if status not in ("proposed", "approved"):
             return "refused", dict(row)
+        if row["approval_required"] and status != "approved":
+            return "awaiting_approval", dict(row)
         conn.execute(
             "UPDATE tasks SET owner = ?, model_route = ?, status = 'assigned', updated_at = ? WHERE id = ?",
             (owner, model_route, now, task_id)

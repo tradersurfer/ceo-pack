@@ -203,7 +203,6 @@ EXPECTED_FIELDS = {
     "ceo_task_create": ["task_id", "run_id"],
     "ceo_task_status": ["task_id", "task_status"],
     "ceo_task_list": ["count"],
-    "ceo_task_approve": ["task_id", "task_status"],
     "ceo_task_assign": ["task_id", "owner", "task_status"],
     "ceo_run_status": ["run_id", "run_status"],
 }

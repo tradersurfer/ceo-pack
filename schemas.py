@@ -328,28 +328,6 @@ CEO_TASK_LIST = {
     },
 }
 
-CEO_TASK_APPROVE = {
-    "name": "ceo_task_approve",
-    "description": (
-        "Approve a Type 1 task (owner only). Moves task from 'proposed' to 'approved'. "
-        "Records who approved and when. When the task names an exact action "
-        "(tool_name + arguments, here or at creation), approving mints a "
-        "one-time ticket for that exact action (30 minutes, single use). "
-        "A task with no recorded action is approved but mints no ticket — "
-        "approving alone authorizes nothing."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "task_id": {"type": "string", "description": "Task UUID."},
-            "approved_by": {"type": "string", "description": "Name of the approver (owner)."},
-            "tool_name": {"type": "string", "description": "Optional exact host tool this task will execute (Type 1 gate, Stage 1). Stored as the tool name only."},
-            "arguments": {"type": "object", "description": "Optional exact arguments for tool_name (Type 1 gate, Stage 1). Stored as a SHA-256 hash only — raw values are never stored."},
-        },
-        "required": ["task_id", "approved_by"],
-    },
-}
-
 CEO_TASK_ASSIGN = {
     "name": "ceo_task_assign",
     "description": (

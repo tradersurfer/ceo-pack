@@ -666,6 +666,8 @@ def assign_task_route(task_id: str, body: dict):
         raise HTTPException(status_code=503, detail="task registry unavailable")
     if outcome == "refused":
         raise HTTPException(status_code=409, detail="Task is in '%s' state. Can only assign approved/proposed tasks." % task.get("status"))
+    if outcome == "awaiting_approval":
+        raise HTTPException(status_code=409, detail="Type 1 task is waiting for owner approval; approve it before assigning.")
     if outcome == "conflict":
         raise HTTPException(status_code=409, detail="Task is already assigned to '%s'. Assigning it to '%s' would overwrite the owner — refused. The task keeps its current owner." % (stored.get("owner"), owner))
     # "assigned" and "already_assigned" both return the task; the

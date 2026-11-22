@@ -107,7 +107,8 @@ class TestRegistration(unittest.TestCase):
         declared = self.manifest["provides_tools"]
         registered = sorted(self.ctx.tools)
         self.assertEqual(registered, sorted(declared))
-        self.assertEqual(len(registered), 22)
+        self.assertEqual(len(registered), 21)
+        self.assertNotIn("ceo_task_approve", registered)   # approval is owner-only
         self.assertEqual(self.manifest["version"], "0.5.0")
 
     def test_every_tool_has_schema_and_callable_handler(self):

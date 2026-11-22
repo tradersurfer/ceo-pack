@@ -660,8 +660,12 @@ def ceo_task_create(args, **kwargs):
     task_key = args.get("task_key")
     owner = args.get("owner")
     model_route = args.get("model_route")
-    approval_required = bool(args.get("approval_required", False))
     risk_flags = args.get("risk_flags") or []
+    # The model may ask for approval, never waive it: risky wording or an
+    # explicit risk flag forces the Type 1 gate on.
+    approval_required = bool(args.get("approval_required", False)) or bool(
+        orch.infer_risk({"task": title, "notes": args.get("description", "")})
+    ) or bool(risk_flags)
     parent_task_id = args.get("parent_task_id")
     metadata = args.get("metadata") or {}
     description = args.get("description", "")
@@ -696,7 +700,7 @@ def ceo_task_create(args, **kwargs):
     # action was recorded (invalid tool_name / arguments are ignored).
     stored = tasks.get_task(task_id)
     action_tool = (stored or {}).get("action_tool")
-    note = "Task created with status 'proposed'. Type 1 tasks require owner approval via ceo_task_approve."
+    note = "Task created with status 'proposed'. Type 1 tasks wait for the owner to approve them (dashboard or /task-approve); the model cannot approve."
     if action_tool:
         note += " Exact action recorded — approving will mint a one-time ticket for it."
     return _ok({
@@ -810,74 +814,6 @@ def ceo_task_list(args, **kwargs):
     }, ignored=_ignored("ceo_task_list", args))
 
 
-def ceo_task_approve(args, **kwargs):
-    """Approve a Type 1 task (owner only)."""
-    args, bad = _prep(args)
-    if bad:
-        return bad
-    try:
-        from . import tasks
-    except ImportError:
-        import tasks
-    
-    task_id, e = _text(args, "task_id")
-    if e:
-        return _err("Need task_id")
-    approved_by, e = _text(args, "approved_by")
-    if e:
-        return _err("Need approved_by")
-    
-    task = tasks.get_task(task_id)
-    if not task:
-        return _err(f"Task {task_id} not found")
-    
-    if not task.get("approval_required"):
-        return _err("Task does not require approval (not a Type 1 task)")
-    
-    if task.get("status") != "proposed":
-        return _err(f"Task is in '{task.get('status')}' state, not 'proposed'. Can only approve proposed tasks.")
-    
-    # Stage 1 gate: optional exact action (tool_name + arguments). When
-    # given here it is recorded on the task and a one-time ticket is
-    # minted for it; when the task already names an action, that one is
-    # used instead. Raw argument values are never stored — only the hash.
-    tool_name = args.get("tool_name")
-    if tool_name is not None and not isinstance(tool_name, str):
-        return _err("tool_name must be a string.")
-    arguments = args.get("arguments")
-    if arguments is not None and not isinstance(arguments, dict):
-        return _err("arguments must be an object.")
-    
-    ok = tasks.approve_task(task_id, approved_by, tool_name=tool_name, arguments=arguments, minted_via="chat")
-    if not ok:
-        return _err("Failed to approve task")
-    
-    # The stored row is the truth about what was minted: a ticket exists
-    # only when the approved task names an exact action.
-    stored = tasks.get_task(task_id) or {}
-    action_tool = stored.get("action_tool")
-    action_hash = stored.get("action_args_hash")
-    token = tasks.get_live_token(task_id, action_tool, action_hash) if action_tool and action_hash else None
-    if token:
-        note = ("Task approved. One-time ticket minted for the exact action "
-                f"({action_tool}) — 30 minutes, single use. Assign owner/profile "
-                "via ceo_task_assign, then it can be executed.")
-    else:
-        note = ("Task approved. No action was recorded, so no approval ticket "
-                "was minted — approving alone authorizes nothing. Record the "
-                "exact action (tool_name + arguments) when approving. Assign "
-                "owner/profile via ceo_task_assign.")
-    return _ok({
-        "task_id": task_id,
-        "task_status": "approved",
-        "approved_by": approved_by,
-        "action_tool": action_tool,
-        "token_minted": bool(token),
-        "token_id": token.get("token_id") if token else None,
-        "note": note,
-    }, ignored=_ignored("ceo_task_approve", args))
-
-
 def ceo_task_complete(args, **kwargs):
     """Mark a running task completed. Completed is NOT verified."""
     args, bad = _prep(args)
@@ -949,6 +885,8 @@ def ceo_task_assign(args, **kwargs):
         return _err(f"Task {task_id} not found")
     if outcome == "refused":
         return _err(f"Task is in '{task.get('status')}' state. Can only assign approved/proposed tasks.")
+    if outcome == "awaiting_approval":
+        return _err("Type 1 task is waiting for owner approval; it cannot be assigned until the owner approves it.")
     if outcome == "conflict":
         return _err(
             f"Task is already assigned to '{task.get('owner')}'. "

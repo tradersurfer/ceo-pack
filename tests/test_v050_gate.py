@@ -57,6 +57,18 @@ ACTION_ARGS_CHANGED = {"decision": "sign the vendor NDA",
                        "chosen": "sign it — marker ZULU-7-ECHO"}
 
 
+_SLASH_PKG = None
+
+
+def _slash_approve():
+    """The real /task-approve handler, loaded through the plugin package."""
+    global _SLASH_PKG
+    if _SLASH_PKG is None:
+        from test_v050_registration import load_plugin_package
+        _SLASH_PKG = load_plugin_package("ceo_pack_gate_slash_test")
+    return _SLASH_PKG._task_approve_command
+
+
 class GateBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -418,22 +430,24 @@ class TestDashboardGate(GateBase):
         self.assertFalse(response["token_minted"])
         self.assertIsNone(response["token_id"])
 
-    def test_chat_approve_reports_token_minted(self):
+    def test_slash_approve_reports_token_minted(self):
+        # Owner approval in chat is the /task-approve slash command (typed
+        # by the user, never model-routed); the model has no approve tool.
         task_id = self._create_via_tool(tool_name=ACTION_TOOL, arguments=ACTION_ARGS)
-        result = json.loads(tools_mod.ceo_task_approve(
-            {"task_id": task_id, "approved_by": "Owner"}))
-        self.assertEqual(result["status"], "success", result)
-        self.assertTrue(result["token_minted"])
-        self.assertIsNotNone(result["token_id"])
+        reply = _slash_approve()(task_id)
+        self.assertIn("Approved", reply)
+        self.assertIn("One-time ticket minted for " + ACTION_TOOL, reply)
+        self.assertIsNotNone(tasks_mod.find_live_token(
+            ACTION_TOOL, tasks_mod.canonical_args_hash(ACTION_ARGS), db_path=self.db))
 
-    def test_chat_approve_without_action_reports_no_token(self):
+    def test_slash_approve_without_action_reports_no_token(self):
         task_id = self._create_via_tool()
-        result = json.loads(tools_mod.ceo_task_approve(
-            {"task_id": task_id, "approved_by": "Owner"}))
-        self.assertEqual(result["status"], "success", result)
-        self.assertFalse(result["token_minted"])
-        self.assertIsNone(result["token_id"])
-        self.assertIn("no approval ticket", result["note"])
+        reply = _slash_approve()(task_id)
+        self.assertIn("Approved", reply)
+        self.assertIn("no ticket was minted", reply)
+
+    def test_model_cannot_mint_a_ticket(self):
+        self.assertFalse(hasattr(tools_mod, "ceo_task_approve"))
 
     def test_gate_decisions_lists_audit_rows(self):
         task_id = self._create_via_tool(tool_name=ACTION_TOOL, arguments=ACTION_ARGS)
@@ -538,3 +552,51 @@ class TestDelegationGap(GateBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMergeRegressions(GateBase):
+    """v0.6.0 x main merge: the owner-only approval fix must survive the
+    v0.6 assign rewrite (try_assign_task) and the single pre_tool_call hook
+    must still feed the Stage 1 observer."""
+
+    def test_try_assign_refuses_unapproved_type1(self):
+        task_id = self.make_task()
+        outcome, row = tasks_mod.try_assign_task(task_id, "CFO", db_path=self.db)
+        self.assertEqual(outcome, "awaiting_approval")
+        stored = tasks_mod.get_task(task_id, db_path=self.db)
+        self.assertEqual(stored["status"], "proposed")
+        self.assertIsNone(stored["owner"])          # nothing written
+
+    def test_try_assign_allows_after_owner_approval(self):
+        task_id = self.make_task()
+        self.approve_task(task_id)
+        outcome, _ = tasks_mod.try_assign_task(task_id, "CFO", db_path=self.db)
+        self.assertEqual(outcome, "assigned")
+
+    def test_dashboard_assign_refuses_unapproved_type1_with_409(self):
+        task_id = self.make_task()
+        try:
+            api.assign_task_route(task_id=task_id, body={"owner": "CFO"})
+            self.fail("expected 409")
+        except Exception as exc:
+            self.assertEqual(getattr(exc, "status_code", None), 409)
+        self.assertIsNone(tasks_mod.get_task(task_id, db_path=self.db)["owner"])
+
+    def test_tool_assign_refuses_unapproved_type1(self):
+        task_id = self.make_task()
+        out = json.loads(tools_mod.ceo_task_assign({"task_id": task_id, "owner": "CFO"}))
+        self.assertEqual(out["status"], "error")
+        self.assertIn("waiting for owner approval", json.dumps(out))
+
+    def test_single_registered_hook_still_feeds_the_observer(self):
+        from test_v050_registration import RecordingCtx, load_plugin_package
+        pkg = load_plugin_package("ceo_pack_gate_hook_test")
+        ctx = RecordingCtx()
+        pkg.register(ctx)
+        hooks = [cb for (event, cb) in ctx.hooks if event == "pre_tool_call"] \
+            if isinstance(ctx.hooks, list) else [ctx.hooks["pre_tool_call"]]
+        self.assertEqual(len(hooks), 1)
+        self.assertIsNone(hooks[0](tool_name="ceo_assign", args={"task": "x"}))
+        n = sqlite3.connect(self.db).execute(
+            "SELECT COUNT(*) FROM gate_audit WHERE tool_name = 'ceo_assign'").fetchone()[0]
+        self.assertEqual(n, 1)

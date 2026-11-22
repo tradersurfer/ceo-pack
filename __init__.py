@@ -37,6 +37,57 @@ _SKILLS = [
     "ceo-pack-usage",
 ]
 
+_GATE_OBSERVER = None  # gate._on_pre_tool_call, bound in register()
+
+
+def _on_pre_tool_call(tool_name=None, args=None, **kwargs):
+    """The plugin's one pre_tool_call hook.
+
+    1. Owner-only approval guard: the model can never approve a Type 1 task.
+       Approval is not a tool any more; if a stale schema or a hand-written
+       call names an approval tool anyway, block it.
+    2. Type 1 gate, Stage 1 (warn/observe only): log what the gate WOULD
+       have stopped. The observer always returns None — it never blocks.
+    """
+    name = str(tool_name or "").lower()
+    if name.startswith("ceo_") and "approve" in name:
+        return {"action": "block",
+                "message": "Type 1 approval is owner-only. Ask the owner to approve in the CEO dashboard or with /task-approve."}
+    if _GATE_OBSERVER is not None:
+        try:
+            _GATE_OBSERVER(tool_name=tool_name, args=args, **kwargs)
+        except Exception:
+            logger.exception("CEO Pack gate observer failed for %s", tool_name)
+    return None
+
+
+def _task_approve_command(raw_args):
+    """/task-approve <task_id> — typed by the user, handled here, never by the model."""
+    task_id = (raw_args or "").strip().split()[0] if (raw_args or "").strip() else ""
+    if not task_id:
+        return "Usage: /task-approve <task_id>  (owner only; moves a Type 1 task from proposed to approved)"
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
+    task = tasks.get_task(task_id)
+    if not task:
+        return f"No task with id {task_id}."
+    if not task.get("approval_required"):
+        return "That task does not need approval (it is not a Type 1 task)."
+    if task.get("status") != "proposed":
+        return f"That task is '{task.get('status')}', not 'proposed'. Only proposed tasks can be approved."
+    if tasks.approve_task(task_id, "owner", note="Type 1 approval granted (slash command)", minted_via="slash"):
+        stored = tasks.get_task(task_id) or {}
+        tool, digest = stored.get("action_tool"), stored.get("action_args_hash")
+        if tool and digest and tasks.get_live_token(task_id, tool, digest):
+            ticket = f" One-time ticket minted for {tool} (30 min, single use; warn mode — nothing is enforced yet)."
+        else:
+            ticket = " No action was recorded, so no ticket was minted."
+        return f"Approved: {task.get('title')}. It can now be assigned.{ticket}"
+    return "Could not approve (the task may have just moved). Check its status."
+
+
 def _on_post_tool_call(tool_name, args, result, task_id, **kwargs):
     """Wire verification into the post_tool_call hook (v0.3.0 step 5).
 
@@ -274,10 +325,6 @@ def register(ctx):
         schema=schemas.CEO_TASK_LIST, handler=tools.ceo_task_list,
     )
     ctx.register_tool(
-        name="ceo_task_approve", toolset="ceo-pack",
-        schema=schemas.CEO_TASK_APPROVE, handler=tools.ceo_task_approve,
-    )
-    ctx.register_tool(
         name="ceo_task_assign", toolset="ceo-pack",
         schema=schemas.CEO_TASK_ASSIGN, handler=tools.ceo_task_assign,
     )
@@ -295,17 +342,20 @@ def register(ctx):
     )
 
     ctx.register_hook("post_tool_call", _on_post_tool_call)
+    ctx.register_hook("pre_tool_call", _on_pre_tool_call)
 
     # --- Type 1 gate, Stage 1 (warn/observe only) ---
     # pre_tool_call observes every tool call and logs what the gate WOULD
     # have stopped. It never blocks and never consumes a ticket in Stage 1.
     # Registration failure must not break the rest of the plugin.
+    # It runs inside _on_pre_tool_call (one hook per event for this plugin).
+    global _GATE_OBSERVER
     try:
         from . import gate as _gate
-        ctx.register_hook("pre_tool_call", _gate._on_pre_tool_call)
+        _GATE_OBSERVER = _gate._on_pre_tool_call
         logger.info("CEO Pack Type 1 gate registered (Stage 1, warn/observe only)")
     except Exception:
-        logger.exception("CEO Pack: pre_tool_call gate registration failed")
+        logger.exception("CEO Pack: Type 1 gate observer failed to load")
 
     # --- Skills ---
     skills_dir = Path(__file__).parent / "skills"
@@ -382,8 +432,6 @@ def register(ctx):
          "first read the user's words below and work out which task, by its id or title"),
         ("task-list", "ceo_task_list", "List tasks by seat, status, or run",
          "first read the user's words below and work out how to filter the list — by seat, status, or run, if the user said any"),
-        ("task-approve", "ceo_task_approve", "Approving a Type 1 task (owner only)",
-         "first read the user's words below and work out which task to approve and who is approving it (the owner)"),
         ("task-assign", "ceo_task_assign", "Assign a task to an owner/profile",
          "first read the user's words below and work out which task and who owns it now"),
         ("task-complete", "ceo_task_complete", "Mark a running task completed (completed, not verified)",
@@ -399,6 +447,12 @@ def register(ctx):
             (lambda tool, instruction: (lambda raw: _tool_prompt(tool, instruction, raw)))(_tool, _instruction),
             description=_desc,
         )
+    # Owner-only approval: a real handler the user types. It is NOT model-routed
+    # (no tool prompt) and there is no model-callable approval tool.
+    ctx.register_command(
+        "task-approve", _task_approve_command,
+        description="Approve a Type 1 task (owner only): /task-approve <task_id>",
+    )
     # --- v0.5.0: Unified CEO Delegation Provider ---
     try:
         from .delegation_provider import CEODelegationProvider

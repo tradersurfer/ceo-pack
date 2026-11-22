@@ -95,7 +95,6 @@ EXPECTED_TOOL = {
     "task-create": "ceo_task_create",
     "task-status": "ceo_task_status",
     "task-list": "ceo_task_list",
-    "task-approve": "ceo_task_approve",
     "task-assign": "ceo_task_assign",
     "run-create": "ceo_run_create",
     "run-status": "ceo_run_status",

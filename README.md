@@ -145,7 +145,7 @@ Each seat runs on a model route or a Hermes profile route, configured with `/ceo
 |---|---|
 | Orchestrate | `ceo_orchestrate`, `ceo_brief`, `ceo_route`, `ceo_assign`, `ceo_tool_call`, `ceo_verify`, `ceo_decision_log`, `ceo_choose_model`, `ceo_roster` |
 | Closeout & checks | `q4_closeout_checklist`, `ceo_closeout_checklist`, `ceo_daily_check`, `ceo_performance_check`, `ceo_status_check` |
-| Tasks & runs (v0.5.0) | `ceo_task_create`, `ceo_task_status`, `ceo_task_list`, `ceo_task_approve`, `ceo_task_assign`, `ceo_task_complete`, `ceo_run_create`, `ceo_run_status` |
+| Tasks & runs (v0.5.0) | `ceo_task_create`, `ceo_task_status`, `ceo_task_list`, `ceo_task_assign`, `ceo_task_complete`, `ceo_run_create`, `ceo_run_status` |
 
 Slash commands: `/ceo`, `/q4`, `/orchestrate`, plus `/brief`, `/assign`, `/verify`, `/log`, `/decision`, `/route`, `/models`, `/weekly-pulse`, `/closeout`, `/q1`, `/q2`, `/q3`, `/monthly-closeout`, `/daily-checks`, `/eod-checks`, `/performance-checks`, `/status-check`, `/roster`, `/task-create`, `/task-status`, `/task-list`, `/task-approve`, `/task-assign`, `/task-complete`, `/run-create`, `/run-status`, and `/ceo delegation`.
 
@@ -171,7 +171,7 @@ Cost mode constrains the choice: the model picks, the cost mode sets the ceiling
 
 Nothing external, priced, or shipped without owner approval for that item. A decision log entry is not approval. Tools flag approval; the owner approves in chat or from the dashboard approval center.
 
-Known limitation, stated plainly: in v0.5.0, Type 1 approval is **flag-not-block**. A task flagged `approval_required` waits for your approval in the approval center, but `ceo_task_assign` itself does not block an unapproved Type 1 task. A `pre_tool_call` gate exists in warn/observe mode (Stage 1): it logs what it would have blocked but blocks nothing — blocking ships in Stage 2 behind an explicit switch.
+Known limitations, stated plainly: only the owner can approve a Type 1 task — in the dashboard approval center or with the `/task-approve <task_id>` slash command (typed by you, never routed through the model; the model has no approve tool). The registry refuses to assign an unapproved Type 1 task. That is bookkeeping, not execution control: nothing in the plugin stops the agent from using other Hermes tools. A `pre_tool_call` gate exists in warn/observe mode (Stage 1): it logs what it would have blocked but blocks nothing, and its risk check reads planning fields, so most host-tool calls are not classified yet. Blocking ships in Stage 2 behind an explicit switch. An agent with raw terminal access to your account can still write the local registry or the dashboard API directly.
 
 ## Security model
 

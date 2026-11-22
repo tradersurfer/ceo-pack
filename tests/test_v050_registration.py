@@ -106,7 +106,8 @@ class TestRegistration(unittest.TestCase):
         declared = self.manifest["provides_tools"]
         registered = sorted(self.ctx.tools)
         self.assertEqual(registered, sorted(declared))
-        self.assertEqual(len(registered), 21)
+        self.assertEqual(len(registered), 20)
+        self.assertNotIn("ceo_task_approve", registered)   # approval is owner-only
         self.assertEqual(self.manifest["version"], "0.5.0")
 
     def test_every_tool_has_schema_and_callable_handler(self):
@@ -123,7 +124,7 @@ class TestRegistration(unittest.TestCase):
 
     def test_hook_registered(self):
         self.assertEqual([name for name, _ in self.ctx.hooks],
-                         ["post_tool_call"])
+                         ["post_tool_call", "pre_tool_call"])
 
     def test_delegation_provider_registered(self):
         self.assertEqual(len(self.ctx.providers), 1)

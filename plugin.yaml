@@ -5,8 +5,6 @@ description: CEO Pack gives you an AI C-suite inside Hermes. You say what your b
 author: tradersurfer93
 license: MIT
 requires_hermes: ">=0.22.5"
-requires_plugins:
-  - id: bot-forge
 provides_tools:
   - ceo_brief
   - ceo_assign
@@ -25,7 +23,6 @@ provides_tools:
   - ceo_task_create
   - ceo_task_status
   - ceo_task_list
-  - ceo_task_approve
   - ceo_task_assign
   - ceo_run_create
   - ceo_run_status

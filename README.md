@@ -144,7 +144,7 @@ Each seat runs on a model route or a Hermes profile route, configured with `/ceo
 |---|---|
 | Orchestrate | `ceo_orchestrate`, `ceo_brief`, `ceo_route`, `ceo_assign`, `ceo_tool_call`, `ceo_verify`, `ceo_decision_log`, `ceo_choose_model`, `ceo_roster` |
 | Closeout & checks | `q4_closeout_checklist`, `ceo_closeout_checklist`, `ceo_daily_check`, `ceo_performance_check`, `ceo_status_check` |
-| Tasks & runs (v0.5.0) | `ceo_task_create`, `ceo_task_status`, `ceo_task_list`, `ceo_task_approve`, `ceo_task_assign`, `ceo_run_create`, `ceo_run_status` |
+| Tasks & runs (v0.5.0) | `ceo_task_create`, `ceo_task_status`, `ceo_task_list`, `ceo_task_assign`, `ceo_run_create`, `ceo_run_status` |
 
 Slash commands: `/ceo`, `/q4`, `/orchestrate`, plus `/brief`, `/assign`, `/verify`, `/log`, `/decision`, `/route`, `/models`, `/weekly-pulse`, `/closeout`, `/q1`, `/q2`, `/q3`, `/monthly-closeout`, `/daily-checks`, `/eod-checks`, `/performance-checks`, `/status-check`, `/roster`, `/task-create`, `/task-status`, `/task-list`, `/task-approve`, `/task-assign`, `/run-create`, `/run-status`, and `/ceo delegation`.
 

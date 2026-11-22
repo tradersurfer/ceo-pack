@@ -34,7 +34,7 @@ import tools  # noqa: E402
 FAKE_SK = "sk-" + "abcdefghijklmnop1234567890"  # fake, assembled so no scanner flags this file
 
 HANDLERS = ("ceo_run_create", "ceo_task_create", "ceo_task_status",
-            "ceo_task_list", "ceo_task_approve", "ceo_task_assign",
+            "ceo_task_list", "ceo_task_assign",
             "ceo_run_status")
 
 
@@ -80,8 +80,9 @@ class TestHappyPaths(HandlerBase):
         self.assertTrue(status["approval_required"])
         self.assertEqual(status["history"][0]["to_status"], "proposed")
 
-        approved = call(tools.ceo_task_approve, task_id=tid, approved_by="Owner")
-        self.assertEqual(approved["task_status"], "approved")
+        # Approval is owner-only (dashboard / slash command), not a tool: simulate the owner.
+        self.assertTrue(tasks.approve_task(tid, "owner", db_path=self.db))
+        self.assertEqual(tasks.get_task(tid, db_path=self.db)["status"], "approved")
         assigned = call(tools.ceo_task_assign, task_id=tid, owner="CFO",
                         model_route="free_default")
         self.assertEqual(assigned["owner"], "CFO")
@@ -123,14 +124,13 @@ class TestVerifyEnvelope(HandlerBase):
     def test_all_seven_success_results_verify(self):
         run_id = self.make_run()
         tid = self.make_task(run_id, approval_required=True)
+        tasks.approve_task(tid, "owner", db_path=self.db)   # owner-only step, not a tool
         cases = {
             "ceo_run_create": call(tools.ceo_run_create, goal="x"),
             "ceo_task_create": call(tools.ceo_task_create, run_id=run_id,
                                      seat="CFO", title="Books"),
             "ceo_task_status": call(tools.ceo_task_status, task_id=tid),
             "ceo_task_list": call(tools.ceo_task_list, run_id=run_id),
-            "ceo_task_approve": call(tools.ceo_task_approve, task_id=tid,
-                                      approved_by="Owner"),
             "ceo_task_assign": call(tools.ceo_task_assign, task_id=tid, owner="CFO"),
             "ceo_run_status": call(tools.ceo_run_status, run_id=run_id),
         }
@@ -146,18 +146,6 @@ class TestVerifyEnvelope(HandlerBase):
 
 
 class TestGuards(HandlerBase):
-    def test_approve_requires_type1_and_proposed(self):
-        tid = self.make_task()  # not approval_required
-        err = call(tools.ceo_task_approve, task_id=tid, approved_by="Owner")
-        self.assertEqual(err["status"], "error")
-        self.assertIn("does not require approval", err["error"])
-
-        tid2 = self.make_task(approval_required=True)
-        call(tools.ceo_task_approve, task_id=tid2, approved_by="Owner")
-        err2 = call(tools.ceo_task_approve, task_id=tid2, approved_by="Owner")
-        self.assertEqual(err2["status"], "error")
-        self.assertIn("not 'proposed'", err2["error"])
-
     def test_assign_refuses_terminal_states(self):
         tid = self.make_task()
         tasks.update_task_status(tid, "approved", db_path=self.db)
@@ -181,7 +169,6 @@ class TestGuards(HandlerBase):
     def test_missing_rows_are_errors(self):
         for fn, args in (
             (tools.ceo_task_status, {"task_id": "no-such-task"}),
-            (tools.ceo_task_approve, {"task_id": "no-such-task", "approved_by": "Owner"}),
             (tools.ceo_task_assign, {"task_id": "no-such-task", "owner": "CFO"}),
             (tools.ceo_run_status, {"run_id": "no-such-run"}),
         ):
@@ -222,8 +209,6 @@ class TestSecrets(HandlerBase):
                                      "api_key": FAKE_SK}),
             (tools.ceo_task_status, {"task_id": tid, "password": FAKE_SK}),
             (tools.ceo_task_list, {"run_id": run_id, "api_key": FAKE_SK}),
-            (tools.ceo_task_approve, {"task_id": tid, "approved_by": "Owner",
-                                      "api_key": FAKE_SK}),
             (tools.ceo_task_assign, {"task_id": tid, "owner": "CFO",
                                      "api_key": FAKE_SK}),
             (tools.ceo_run_status, {"run_id": run_id, "api_key": FAKE_SK}),
@@ -299,7 +284,6 @@ class TestFuzz(HandlerBase):
             "ceo_task_create": {"run_id": run_id, "seat": "CFO", "title": "x"},
             "ceo_task_status": {"task_id": tid},
             "ceo_task_list": {"run_id": run_id},
-            "ceo_task_approve": {"task_id": tid, "approved_by": "Owner"},
             "ceo_task_assign": {"task_id": tid, "owner": "CFO"},
             "ceo_run_status": {"run_id": run_id},
         }
@@ -308,7 +292,6 @@ class TestFuzz(HandlerBase):
             "ceo_task_create": tools.ceo_task_create,
             "ceo_task_status": tools.ceo_task_status,
             "ceo_task_list": tools.ceo_task_list,
-            "ceo_task_approve": tools.ceo_task_approve,
             "ceo_task_assign": tools.ceo_task_assign,
             "ceo_run_status": tools.ceo_run_status,
         }

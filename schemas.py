@@ -326,22 +326,6 @@ CEO_TASK_LIST = {
     },
 }
 
-CEO_TASK_APPROVE = {
-    "name": "ceo_task_approve",
-    "description": (
-        "Approve a Type 1 task (owner only). Moves task from 'proposed' to 'approved'. "
-        "Records who approved and when."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "task_id": {"type": "string", "description": "Task UUID."},
-            "approved_by": {"type": "string", "description": "Name of the approver (owner)."},
-        },
-        "required": ["task_id", "approved_by"],
-    },
-}
-
 CEO_TASK_ASSIGN = {
     "name": "ceo_task_assign",
     "description": (

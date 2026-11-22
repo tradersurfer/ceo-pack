@@ -660,8 +660,12 @@ def ceo_task_create(args, **kwargs):
     task_key = args.get("task_key")
     owner = args.get("owner")
     model_route = args.get("model_route")
-    approval_required = bool(args.get("approval_required", False))
     risk_flags = args.get("risk_flags") or []
+    # The model may ask for approval, never waive it: risky wording or an
+    # explicit risk flag forces the Type 1 gate on.
+    approval_required = bool(args.get("approval_required", False)) or bool(
+        orch.infer_risk({"task": title, "notes": args.get("description", "")})
+    ) or bool(risk_flags)
     parent_task_id = args.get("parent_task_id")
     metadata = args.get("metadata") or {}
     description = args.get("description", "")
@@ -688,7 +692,7 @@ def ceo_task_create(args, **kwargs):
         "title": title,
         "task_status": "proposed",
         "approval_required": approval_required,
-        "note": "Task created with status 'proposed'. Type 1 tasks require owner approval via ceo_task_approve."
+        "note": "Task created with status 'proposed'. Type 1 tasks wait for the owner to approve them (dashboard or /task-approve); the model cannot approve."
     }, ignored=_ignored("ceo_task_create", args))
 
 
@@ -791,45 +795,6 @@ def ceo_task_list(args, **kwargs):
     }, ignored=_ignored("ceo_task_list", args))
 
 
-def ceo_task_approve(args, **kwargs):
-    """Approve a Type 1 task (owner only)."""
-    args, bad = _prep(args)
-    if bad:
-        return bad
-    try:
-        from . import tasks
-    except ImportError:
-        import tasks
-    
-    task_id, e = _text(args, "task_id")
-    if e:
-        return _err("Need task_id")
-    approved_by, e = _text(args, "approved_by")
-    if e:
-        return _err("Need approved_by")
-    
-    task = tasks.get_task(task_id)
-    if not task:
-        return _err(f"Task {task_id} not found")
-    
-    if not task.get("approval_required"):
-        return _err("Task does not require approval (not a Type 1 task)")
-    
-    if task.get("status") != "proposed":
-        return _err(f"Task is in '{task.get('status')}' state, not 'proposed'. Can only approve proposed tasks.")
-    
-    ok = tasks.approve_task(task_id, approved_by)
-    if not ok:
-        return _err("Failed to approve task")
-    
-    return _ok({
-        "task_id": task_id,
-        "task_status": "approved",
-        "approved_by": approved_by,
-        "note": "Task approved. Assign owner/profile via ceo_task_assign, then it can be executed."
-    }, ignored=_ignored("ceo_task_approve", args))
-
-
 def ceo_task_assign(args, **kwargs):
     """Assign a task to an owner/profile and optionally a model route."""
     args, bad = _prep(args)
@@ -854,6 +819,8 @@ def ceo_task_assign(args, **kwargs):
     
     if task.get("status") not in ("approved", "proposed"):
         return _err(f"Task is in '{task.get('status')}' state. Can only assign approved/proposed tasks.")
+    if task.get("approval_required") and task.get("status") != "approved":
+        return _err("Type 1 task is waiting for owner approval; it cannot be assigned until the owner approves it.")
     
     ok = tasks.assign_task(task_id, owner, model_route)
     if not ok:

@@ -37,6 +37,40 @@ _SKILLS = [
     "ceo-pack-usage",
 ]
 
+def _on_pre_tool_call(tool_name=None, args=None, **kwargs):
+    """Owner-only approval guard: the model can never approve a Type 1 task.
+
+    Approval is not a tool any more. If a stale schema or a hand-written call
+    names an approval tool anyway, block it.
+    """
+    name = str(tool_name or "").lower()
+    if name.startswith("ceo_") and "approve" in name:
+        return {"action": "block",
+                "message": "Type 1 approval is owner-only. Ask the owner to approve in the CEO dashboard or with /task-approve."}
+    return None
+
+
+def _task_approve_command(raw_args):
+    """/task-approve <task_id> — typed by the user, handled here, never by the model."""
+    task_id = (raw_args or "").strip().split()[0] if (raw_args or "").strip() else ""
+    if not task_id:
+        return "Usage: /task-approve <task_id>  (owner only; moves a Type 1 task from proposed to approved)"
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
+    task = tasks.get_task(task_id)
+    if not task:
+        return f"No task with id {task_id}."
+    if not task.get("approval_required"):
+        return "That task does not need approval (it is not a Type 1 task)."
+    if task.get("status") != "proposed":
+        return f"That task is '{task.get('status')}', not 'proposed'. Only proposed tasks can be approved."
+    if tasks.approve_task(task_id, "owner", note="Type 1 approval granted (slash command)"):
+        return f"Approved: {task.get('title')}. It can now be assigned."
+    return "Could not approve (the task may have just moved). Check its status."
+
+
 def _on_post_tool_call(tool_name, args, result, task_id, **kwargs):
     """Wire verification into the post_tool_call hook (v0.3.0 step 5).
 
@@ -274,10 +308,6 @@ def register(ctx):
         schema=schemas.CEO_TASK_LIST, handler=tools.ceo_task_list,
     )
     ctx.register_tool(
-        name="ceo_task_approve", toolset="ceo-pack",
-        schema=schemas.CEO_TASK_APPROVE, handler=tools.ceo_task_approve,
-    )
-    ctx.register_tool(
         name="ceo_task_assign", toolset="ceo-pack",
         schema=schemas.CEO_TASK_ASSIGN, handler=tools.ceo_task_assign,
     )
@@ -291,6 +321,7 @@ def register(ctx):
     )
 
     ctx.register_hook("post_tool_call", _on_post_tool_call)
+    ctx.register_hook("pre_tool_call", _on_pre_tool_call)
 
     # --- Skills ---
     skills_dir = Path(__file__).parent / "skills"
@@ -367,8 +398,6 @@ def register(ctx):
          "first read the user's words below and work out which task, by its id or title"),
         ("task-list", "ceo_task_list", "List tasks by seat, status, or run",
          "first read the user's words below and work out how to filter the list — by seat, status, or run, if the user said any"),
-        ("task-approve", "ceo_task_approve", "Approving a Type 1 task (owner only)",
-         "first read the user's words below and work out which task to approve and who is approving it (the owner)"),
         ("task-assign", "ceo_task_assign", "Assign a task to an owner/profile",
          "first read the user's words below and work out which task and who owns it now"),
         ("run-create", "ceo_run_create", "Create an orchestration run",
@@ -382,6 +411,12 @@ def register(ctx):
             (lambda tool, instruction: (lambda raw: _tool_prompt(tool, instruction, raw)))(_tool, _instruction),
             description=_desc,
         )
+    # Owner-only approval: a real handler the user types. It is NOT model-routed
+    # (no tool prompt) and there is no model-callable approval tool.
+    ctx.register_command(
+        "task-approve", _task_approve_command,
+        description="Approve a Type 1 task (owner only): /task-approve <task_id>",
+    )
     # --- v0.5.0: Unified CEO Delegation Provider ---
     try:
         from .delegation_provider import CEODelegationProvider

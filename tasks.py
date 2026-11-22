@@ -90,7 +90,18 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 """
 
-DEFAULT_DB_PATH = Path.home() / ".hermes" / "plugins" / "ceo-pack" / DB_NAME
+def _hermes_home() -> Path:
+    """Active profile's Hermes home, so each profile keeps its own registry."""
+    try:
+        from hermes_constants import get_hermes_home
+        return Path(get_hermes_home())
+    except Exception:
+        import os
+        return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+
+
+def default_db_path() -> Path:
+    return _hermes_home() / "plugins" / "ceo-pack" / DB_NAME
 
 
 def _resolve_db_path(custom_path: Optional[str] = None) -> Path:
@@ -101,7 +112,7 @@ def _resolve_db_path(custom_path: Optional[str] = None) -> Path:
     env_path = os.environ.get("CEO_PACK_TASK_DB")
     if env_path:
         return Path(env_path)
-    return DEFAULT_DB_PATH
+    return default_db_path()
 
 
 @contextmanager
@@ -430,6 +441,10 @@ def move_to_assigned(task_id: str, actor: str = "system", note: str = "", db_pat
         if not row or row["status"] not in ("proposed", "approved"):
             return False
         old_status = row["status"]
+        if old_status == "proposed":
+            gate = conn.execute("SELECT approval_required FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if gate and gate["approval_required"]:
+                return False   # Type 1: only the owner's approval opens this gate
         conn.execute(
             "UPDATE tasks SET status = 'assigned', updated_at = ? WHERE id = ?",
             (now, task_id)

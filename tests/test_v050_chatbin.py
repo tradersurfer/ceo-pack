@@ -170,7 +170,7 @@ class ChatBinStaticGuards(unittest.TestCase):
 NODE_HARNESS = r"""
 const fs = require('fs');
 const INDEX = process.argv[2];
-const src = fs.readFileSync(INDEX, 'utf8');
+const src = fs.readFileSync(INDEX, 'utf8').replace(/\r\n/g, '\n');  // Windows autocrlf checkouts
 const m = src.match(/\/\/ --- BEGIN CeoChatWire ---\n([\s\S]*?)\/\/ --- END CeoChatWire ---/);
 if (!m) { console.log(JSON.stringify({ passed: [], failed: ['wire markers not found'] })); process.exit(0); }
 const createCeoChatWire = new Function(m[1] + '\n;return createCeoChatWire;')();

@@ -78,6 +78,22 @@ def seats_block(*seats):
     return {"seats": list(seats)}
 
 
+
+import importlib.util as _ilu
+
+
+def _host_importable(mod):
+    try:
+        return _ilu.find_spec(mod) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+# These two tests pin the no-host behaviour. When the suite runs inside a
+# Hermes environment (e.g. the owner's laptop), the host modules import and
+# the no-host path cannot be exercised, so skip instead of failing.
+_HOST_HAS_DAYBREAK = _host_importable("agent.codex_service_tiers")
+
 class ProviderConfigTests(unittest.TestCase):
     def test_valid_seats_parsed(self):
         out = dp.configured_seats(seats_block(
@@ -164,6 +180,7 @@ class ProviderRouteTests(unittest.TestCase):
         self.assertEqual(
             self.provider.route_task({"seat": "CMO", "goal": "x"}, self.config), {})
 
+    @unittest.skipIf(_HOST_HAS_DAYBREAK, "Hermes host importable; no-host path not reachable")
     def test_daybreak_seat_skipped_without_host_support(self):
         # Without the Hermes host, _is_codex cannot import
         # hermes_cli.models, so a daybreak seat fails validation and is
@@ -174,6 +191,7 @@ class ProviderRouteTests(unittest.TestCase):
         self.assertEqual(
             self.provider.route_task({"seat": "CFO", "goal": "x"}, config), {})
 
+    @unittest.skipIf(_HOST_HAS_DAYBREAK, "Hermes host importable; no-host path not reachable")
     def test_daybreak_route_raises_without_host_support(self):
         # The route builder itself refuses when the host cannot offer it.
         with self.assertRaises(dp.DelegationRouteError):

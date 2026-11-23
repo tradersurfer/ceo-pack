@@ -25,6 +25,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from contextlib import contextmanager
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -34,6 +35,19 @@ import orchestration as orch  # noqa: E402
 import tasks as tasks_mod  # noqa: E402
 import tools as tools_mod  # noqa: E402
 import delegation_provider as dp  # noqa: E402
+
+
+
+@contextmanager
+def _db(path):
+    """Test-side connection that commits AND closes (sqlite3's own context
+    manager only commits; an open handle blocks temp cleanup on Windows)."""
+    conn = sqlite3.connect(path)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _load_api():
@@ -71,7 +85,7 @@ def _slash_approve():
 
 class GateBase(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = os.path.join(self.tmp.name, "gate.db")
         self._old_env = os.environ.get("CEO_PACK_TASK_DB")
         os.environ["CEO_PACK_TASK_DB"] = self.db
@@ -284,7 +298,7 @@ class TestHookWarnMode(GateBase):
         token_id = tasks_mod.mint_approval_token(
             task_id, ACTION_TOOL, ACTION_ARGS, "Owner", "chat", db_path=self.db)
         # Simulate Stage 2 consumption: the ticket was used once.
-        with sqlite3.connect(self.db) as conn:
+        with _db(self.db) as conn:
             conn.execute(
                 "UPDATE approval_tokens SET used_at = ?, status = 'used' WHERE token_id = ?",
                 ("2026-11-20T00:00:00+00:00", token_id))
@@ -485,7 +499,7 @@ class TestMigration(GateBase):
     def _downgrade_to_v1(self):
         """Rebuild the temp registry as a v1 registry: drop the gate
         tables and the action columns, reset the version row."""
-        with sqlite3.connect(self.db) as conn:
+        with _db(self.db) as conn:
             conn.execute("UPDATE schema_version SET version = 1")
             conn.execute("DROP TABLE approval_tokens")
             conn.execute("DROP TABLE gate_audit")
@@ -498,7 +512,7 @@ class TestMigration(GateBase):
         old_task = self.make_task()
         self._downgrade_to_v1()
         tasks_mod.init_db(self.db)
-        with sqlite3.connect(self.db) as conn:
+        with _db(self.db) as conn:
             version = conn.execute(
                 "SELECT version FROM schema_version LIMIT 1").fetchone()[0]
         self.assertEqual(version, 2)
@@ -513,7 +527,7 @@ class TestMigration(GateBase):
             tasks_mod.canonical_args_hash(ACTION_ARGS), db_path=self.db))
 
     def test_fresh_db_is_schema_v2(self):
-        with sqlite3.connect(self.db) as conn:
+        with _db(self.db) as conn:
             version = conn.execute(
                 "SELECT version FROM schema_version LIMIT 1").fetchone()[0]
             tables = {r[0] for r in conn.execute(
@@ -597,6 +611,7 @@ class TestMergeRegressions(GateBase):
             if isinstance(ctx.hooks, list) else [ctx.hooks["pre_tool_call"]]
         self.assertEqual(len(hooks), 1)
         self.assertIsNone(hooks[0](tool_name="ceo_assign", args={"task": "x"}))
-        n = sqlite3.connect(self.db).execute(
-            "SELECT COUNT(*) FROM gate_audit WHERE tool_name = 'ceo_assign'").fetchone()[0]
+        with _db(self.db) as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM gate_audit WHERE tool_name = 'ceo_assign'").fetchone()[0]
         self.assertEqual(n, 1)

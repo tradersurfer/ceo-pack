@@ -50,18 +50,61 @@ def _audit(
     )
 
 
-def _is_type1(tool_name: str, args: Any) -> bool:
-    """Narrow net (Adrian's answer #2): the plugin's own approval /
-    side-effect tools, or a risk cue in the call's own arguments.
-    No host-tool effect-capable list in Stage 1. A classification
-    failure raises and becomes a hook_error decision upstream."""
+# Hermes core tools that can change something outside the conversation
+# (toolsets.py _HERMES_CORE_TOOLS). Stage 1 OBSERVES unflagged calls to
+# these — it never classifies them Type 1 on the name alone (Adrian's
+# answer #2: narrow net; widen only if the watch shows real misses).
+_EFFECT_CAPABLE_CORE_TOOLS = frozenset({
+    "terminal", "process_manage", "write_file", "patch", "execute_code",
+    "browser_exec", "browser_cdp", "computer_use", "cronjob_manage",
+})
+# Core tools that only read, plan, or talk to the user.
+_READ_ONLY_CORE_TOOLS = frozenset({
+    "web_search", "web_extract", "read_file", "search_files",
+    "vision_analyze", "image_generate", "skills_list", "skill_view",
+    "skill_manage", "browser_dialog", "browser_vault", "text_to_speech",
+    "todo_list", "memory", "session_search", "clarify", "delegate_task",
+    "manage_connections",
+})
+
+
+def _orch():
     try:
-        from . import orchestration as _orch
+        from . import orchestration as _o
     except ImportError:  # direct-module load (tests load files individually)
-        import orchestration as _orch
-    if tool_name in _orch.APPROVAL_TOOLS or tool_name in _orch.SIDE_EFFECT_TOOLS:
+        import orchestration as _o
+    return _o
+
+
+def _is_type1(tool_name: str, args: Any) -> bool:
+    """Narrow net (Adrian's answer #2), applied at the execution boundary:
+
+    - the plugin's own approval / side-effect tools are Type 1;
+    - the plugin's other ceo_* tools plan, validate or record — they are
+      not execution, so their goal text does not make them Type 1
+      (otherwise "plan a $50k wire" in ceo_brief reads as a wire);
+    - every other tool is Type 1 when a risk cue appears in ANY of its
+      argument strings (infer_risk_in_call) — host tools never carry the
+      planning fields infer_risk reads, so the old check saw nothing.
+
+    No name-only rule for host tools in Stage 1. A classification failure
+    raises and becomes a hook_error decision upstream."""
+    o = _orch()
+    if tool_name in o.APPROVAL_TOOLS or tool_name in o.SIDE_EFFECT_TOOLS:
         return True
-    return bool(_orch.infer_risk(args))
+    if tool_name.startswith("ceo_"):
+        return False
+    return bool(o.infer_risk_in_call(args))
+
+
+def _watch_reason(tool_name: str) -> Optional[str]:
+    """For a call the net did NOT flag: is it one the owner should be
+    able to review for misses? Returns the observation reason or None."""
+    if not tool_name or tool_name.startswith("ceo_") or tool_name in _READ_ONLY_CORE_TOOLS:
+        return None
+    if tool_name in _EFFECT_CAPABLE_CORE_TOOLS:
+        return "unflagged_effect_tool"
+    return "unflagged_unknown_tool"   # connector / MCP / other plugin tool
 
 
 def _no_token_reason(tool_name: str, args_hash: Optional[str], db_path: Optional[str]) -> str:
@@ -118,7 +161,15 @@ def _decide(tool_name: Any, args: Any, session_id: Optional[str], db_path: Optio
 
     # Step 2: Type 1 or not (narrow net).
     if not _is_type1(tool_name, args):
-        return {"decision": "type2", "reason": None, "token_id": None,
+        # Watch data for answer #2: an unflagged call to a tool that can
+        # change things gets an "observed" row (tool + args hash + session,
+        # never the arguments) so the owner can open that session and judge
+        # whether the net missed a real Type 1 call. Observation only.
+        watch = _watch_reason(tool_name)
+        if watch:
+            _audit(decision="observed", tool_name=tool_name, args_hash=args_hash,
+                   session_id=session_id, reason=watch, db_path=db_path)
+        return {"decision": "type2", "reason": watch, "token_id": None,
                 "task_id": None, "mode": "warn"}
 
     # Step 3: Type 1 with no ticket and an unreadable registry. No audit

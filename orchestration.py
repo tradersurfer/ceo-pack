@@ -989,6 +989,36 @@ def infer_risk(arguments):
     return sorted(flag for flag, pattern in _RISK_CUES.items() if pattern.search(blob))
 
 
+
+def _call_strings(value, out, depth=0):
+    """Every string value in a host tool call's arguments, depth-first,
+    bounded (depth 6, 60 strings) so a huge payload cannot stall the hook."""
+    if len(out) >= 60 or depth > 6:
+        return
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, dict):
+        for v in value.values():
+            _call_strings(v, out, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            _call_strings(v, out, depth + 1)
+
+
+def infer_risk_in_call(arguments):
+    """Same risk cues as infer_risk, read over EVERY string value of a
+    host tool call (send_email body, terminal command, file content…),
+    not just the planning fields. Used by the Type 1 gate at the
+    execution boundary, where host tools never carry task/goal/notes.
+    Cues can raise a call to Type 1, never lower it; a miss is not proof
+    of Type 2."""
+    if not isinstance(arguments, dict):
+        return []
+    texts = []
+    _call_strings(arguments, texts)
+    blob = " . ".join(t[:2000] for t in texts)
+    return sorted(flag for flag, pattern in _RISK_CUES.items() if pattern.search(blob))
+
 def _fail(tool_name, message, retryable=True):
     return {
         "valid": False,

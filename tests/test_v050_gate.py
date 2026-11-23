@@ -331,13 +331,17 @@ class TestHookWarnMode(GateBase):
         self.assertEqual(decision["reason"], "token_revoked")
 
     def test_cue_based_type1_without_token_would_block(self):
-        # ceo_brief is not in APPROVAL/SIDE_EFFECT_TOOLS, but its wording
-        # carries the external cue, so the narrow net still catches it.
-        decision = gate_mod.decide_pre_tool_call(
-            "ceo_brief", {"goal": "publish the launch announcement to our followers"},
-            db_path=self.db)
+        # The cue is judged where the work executes: a host tool whose
+        # arguments carry the external cue is Type 1. The same words in a
+        # plugin planning tool (ceo_brief) are planning, not execution.
+        args = {"text": "publish the launch announcement to our followers"}
+        decision = gate_mod.decide_pre_tool_call("mcp_social_post", args, db_path=self.db)
         self.assertEqual(decision["decision"], "would_block")
         self.assertEqual(decision["reason"], "no_token")
+        planning = gate_mod.decide_pre_tool_call(
+            "ceo_brief", {"goal": "publish the launch announcement to our followers"},
+            db_path=self.db)
+        self.assertEqual(planning["decision"], "type2")
 
     def test_type2_call_writes_no_audit_row(self):
         before = len(self.audit())

@@ -121,7 +121,7 @@ CREATE INDEX IF NOT EXISTS idx_tokens_task ON approval_tokens(task_id);
 CREATE TABLE IF NOT EXISTS gate_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at TEXT NOT NULL,                    -- ISO datetime of the decision
-    decision TEXT NOT NULL,              -- allowed | blocked | would_block | would_allow | token_minted | token_revoked | hook_error
+    decision TEXT NOT NULL,              -- allowed | blocked | would_block | would_allow | observed | token_minted | token_revoked | hook_error
     tool_name TEXT,                      -- tool that was called (NULL for mint/revoke events)
     args_hash TEXT,                      -- SHA-256 of canonical args; never the args themselves
     task_id TEXT,                        -- from the matched token, else NULL
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS gate_audit (
     approved_by TEXT,                    -- from the token, else NULL
     actor TEXT,                          -- "gate" for hook decisions; approver for mint/revoke events
     session_id TEXT,                     -- host session id from hook kwargs, when present
-    reason TEXT,                         -- token_match | no_token | token_expired | token_used | token_revoked | modified_arguments | registry_unavailable | hook_error | uncertain_classification
+    reason TEXT,                         -- token_match | no_token | token_expired | token_used | token_revoked | modified_arguments | registry_unavailable | hook_error | uncertain_classification | unflagged_effect_tool | unflagged_unknown_tool
     mode TEXT NOT NULL                   -- enforcement mode live at decision time ("warn" in Stage 1)
 );
 

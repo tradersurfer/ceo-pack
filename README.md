@@ -13,10 +13,10 @@ Your AI C-suite inside Hermes. Say what your business needs in plain words — t
 </p>
 
 <p align="center">
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.5.0-111111" alt="Version 0.5.0" /></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-111111" alt="MIT license" /></a>
-  <a href="https://github.com/NousResearch/hermes-agent"><img src="https://img.shields.io/badge/built%20for-Hermes%20Agent-111111" alt="Built for Hermes Agent" /></a>
-  <a href="https://github.com/tradersurfer/ceo-pack"><img src="https://img.shields.io/badge/tier-community-111111" alt="Community tier" /></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.5.0-orange" alt="Version 0.5.0" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license" /></a>
+  <a href="https://github.com/NousResearch/hermes-agent"><img src="https://img.shields.io/badge/built%20for-Hermes%20Agent-yellow" alt="Built for Hermes Agent" /></a>
+  <a href="https://github.com/tradersurfer/ceo-pack"><img src="https://img.shields.io/badge/tier-community-blue" alt="Community tier" /></a>
 </p>
 
 ## What it is

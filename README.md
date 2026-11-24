@@ -9,7 +9,7 @@ Your AI C-suite inside Hermes. Say what your business needs in plain words — t
 </p>
 
 <p align="center">
-  <strong>v0.5.0 · Hermes 0.22.5+ · Dashboard tab + Desktop page · 21 tools · 29 slash commands</strong>
+  <strong>v0.5.0 · Hermes 0.22.5+ · Dashboard tab + Desktop page · 22 tools · 30 slash commands</strong>
 </p>
 
 <p align="center">
@@ -26,6 +26,7 @@ CEO Pack is not a chat wrapper. It is an orchestration layer for Hermes: you tal
 - **Session mode** — say `/ceo` once and CEO mode stays on for the whole chat. It reads your words, works out the goal, says it back in one plain sentence, then runs the flow on every business message until you say `/ceo off`. You never type `/ceo` on every message.
 - **Every answer is ELI5** — plain words a busy entrepreneur or business owner can follow. No jargon, short sentences, one idea at a time, and always what happens next.
 - **The dashboard tab** — click the CEO Pack tab (`/ceo-pack`, after Kanban) and watch the C-suite work: the org chart, a live activity feed, the task board, and the approval center. Seats active in the last 2 minutes pulse green with a LIVE label. Create, approve, reject, and assign from the UI — the same registry the chat tools use.
+- **The chat bin** — a chat panel docked beside the board on the web dashboard, so you can talk to a seat while watching its work. Pick a seat (CFO, COO, whoever) and it opens a chat in that seat's Hermes profile; a seat with no profile talks to the main agent wearing that seat's hat, and the panel says so plainly. One session per seat plus a Recent list, streamed replies, compact tool rows. A small Gate light in the panel header says whether that seat's profile has CEO Pack: Gate on means the Type 1 gate watches that chat (warn mode — it observes, it doesn't block); Gate off means no gate is watching, because CEO Pack isn't installed in that profile. Web only in v1; on Desktop the page links out to Sessions instead.
 - **The Desktop page** — a native Desktop plugin (sidebar row + `/ceo-pack` page over `ctx.rest`). No iframe, no login wall. Same numbers, same writes, same live pulse.
 - **A persistent task registry** — every task and run lives in a local SQLite registry with UUID ids, an enforced lifecycle (proposed → approved → assigned → running → blocked/completed → verified), dependencies, and execution history. Unknown is shown as unknown — never a zero or an invented timestamp.
 - **Delegation you can configure from chat** — each seat runs on a model route or a Hermes profile route (`/ceo delegation`). The plugin never creates agents.
@@ -138,15 +139,15 @@ Each seat runs on a model route or a Hermes profile route, configured with `/ceo
 
 ## Tools
 
-21 tools, 29 slash commands. The chat tools:
+22 tools, 30 slash commands. The chat tools:
 
 | Group | Tools |
 |---|---|
 | Orchestrate | `ceo_orchestrate`, `ceo_brief`, `ceo_route`, `ceo_assign`, `ceo_tool_call`, `ceo_verify`, `ceo_decision_log`, `ceo_choose_model`, `ceo_roster` |
 | Closeout & checks | `q4_closeout_checklist`, `ceo_closeout_checklist`, `ceo_daily_check`, `ceo_performance_check`, `ceo_status_check` |
-| Tasks & runs (v0.5.0) | `ceo_task_create`, `ceo_task_status`, `ceo_task_list`, `ceo_task_assign`, `ceo_run_create`, `ceo_run_status` |
+| Tasks & runs (v0.5.0) | `ceo_task_create`, `ceo_task_status`, `ceo_task_list`, `ceo_task_assign`, `ceo_task_complete`, `ceo_run_create`, `ceo_run_status` |
 
-Slash commands: `/ceo`, `/q4`, `/orchestrate`, plus `/brief`, `/assign`, `/verify`, `/log`, `/decision`, `/route`, `/models`, `/weekly-pulse`, `/closeout`, `/q1`, `/q2`, `/q3`, `/monthly-closeout`, `/daily-checks`, `/eod-checks`, `/performance-checks`, `/status-check`, `/roster`, `/task-create`, `/task-status`, `/task-list`, `/task-approve`, `/task-assign`, `/run-create`, `/run-status`, and `/ceo delegation`.
+Slash commands: `/ceo`, `/q4`, `/orchestrate`, plus `/brief`, `/assign`, `/verify`, `/log`, `/decision`, `/route`, `/models`, `/weekly-pulse`, `/closeout`, `/q1`, `/q2`, `/q3`, `/monthly-closeout`, `/daily-checks`, `/eod-checks`, `/performance-checks`, `/status-check`, `/roster`, `/task-create`, `/task-status`, `/task-list`, `/task-approve`, `/task-assign`, `/task-complete`, `/run-create`, `/run-status`, and `/ceo delegation`.
 
 Every slash command is analyze-first: it reads your words and works out the tool's inputs before calling it, asking ONE short question when something required is missing — never a bare pointer. The `ceo-pack-usage` skill ships in the plugin with the whole flow in plain words.
 
@@ -158,16 +159,19 @@ The agent runs on whatever model you already selected in Hermes — the plugin n
 |---|---|
 | **Nemotron 3 Ultra free** (`nvidia/nemotron-3-ultra-550b-a55b:free`) | CEO default — 550B, 1M context, orchestration |
 | **Nemotron 3.5 Lightning free** (`nvidia/nemotron-3.5-lightning:free`) | Fast, narrow worker jobs — never the CEO seat |
+| **Ling 3.2 Flash free** (`inclusionai/ling-3.2-flash:free`) | Second free worker — 1M context, tools work |
 | Claude Sonnet 5.5 | Paid value, everyday frontier |
 | Claude Opus 5.5 | Paid flagship, high stakes only — override, not default |
 
 Free caveat, up front: OpenRouter free is 20 requests/min and 50 requests/day until $10 of credits, then 1,000/day — and a CEO task is many requests, one per tool round-trip. Free lineups turn over fast, so verify the live provider list before a demo. The NVIDIA free host lists prompts as "May train" / logged — do not send client books through the free route. The plugin returns the recommendation and IDs; it does not call a model itself, so it stays stdlib-only and catalog-safe.
 
+Cost mode constrains the choice: the model picks, the cost mode sets the ceiling. `free` buys only the four free models; `paid_value` buys the value model plus the free ones; `paid_flagship` buys everything. Ask for a model your cost mode does not cover — say `paid_flagship` while on `free` — and the plugin refuses with the permitted list named, instead of quietly swapping in a cheaper model. With no model asked for, the cost mode picks its default: free → Nemotron 3 Ultra free, paid_value → Claude Sonnet 5.5, paid_flagship → Claude Opus 5.5.
+
 ## Approval gate
 
 Nothing external, priced, or shipped without owner approval for that item. A decision log entry is not approval. Tools flag approval; the owner approves in chat or from the dashboard approval center.
 
-Known limitation, stated plainly: in v0.5.0, Type 1 approval is **flag-not-block**. A task flagged `approval_required` waits for your approval in the approval center, but `ceo_task_assign` itself does not block an unapproved Type 1 task. A blocking `pre_tool_call` gate is design-only until the owner says build it.
+Known limitations, stated plainly: only the owner can approve a Type 1 task — in the dashboard approval center or with the `/task-approve <task_id>` slash command (typed by you, never routed through the model; the model has no approve tool). The registry refuses to assign an unapproved Type 1 task. That is bookkeeping, not execution control: nothing in the plugin stops the agent from using other Hermes tools. A `pre_tool_call` gate exists in warn/observe mode (Stage 1): it logs what it would have blocked but blocks nothing. It reads risk cues across every argument of a host tool call (email bodies, commands, file contents); the cues are plain-language, so code-shaped calls like `pay_invoice.py` or an API path can slip past — those land as `observed` rows (tool, session, argument hash, never the arguments) so you can review the session and decide whether to widen the net. Blocking ships in Stage 2 behind an explicit switch. An agent with raw terminal access to your account can still write the local registry or the dashboard API directly.
 
 ## Security model
 

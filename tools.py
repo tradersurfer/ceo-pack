@@ -669,6 +669,15 @@ def ceo_task_create(args, **kwargs):
     parent_task_id = args.get("parent_task_id")
     metadata = args.get("metadata") or {}
     description = args.get("description", "")
+    # Stage 1 gate: optional exact action this task will execute. The
+    # tool name + arguments are stored as name + hash only; raw argument
+    # values are never stored.
+    tool_name = args.get("tool_name")
+    if tool_name is not None and not isinstance(tool_name, str):
+        return _err("tool_name must be a string.")
+    arguments = args.get("arguments")
+    if arguments is not None and not isinstance(arguments, dict):
+        return _err("arguments must be an object.")
     
     task_id = tasks.create_task(
         run_id=run_id,
@@ -683,8 +692,17 @@ def ceo_task_create(args, **kwargs):
         risk_flags=risk_flags,
         parent_task_id=parent_task_id,
         metadata=metadata,
+        tool_name=tool_name,
+        arguments=arguments,
     )
     
+    # Stage 1 gate: the stored row is the truth about whether the exact
+    # action was recorded (invalid tool_name / arguments are ignored).
+    stored = tasks.get_task(task_id)
+    action_tool = (stored or {}).get("action_tool")
+    note = "Task created with status 'proposed'. Type 1 tasks wait for the owner to approve them (dashboard or /task-approve); the model cannot approve."
+    if action_tool:
+        note += " Exact action recorded — approving will mint a one-time ticket for it."
     return _ok({
         "task_id": task_id,
         "run_id": run_id,
@@ -692,7 +710,8 @@ def ceo_task_create(args, **kwargs):
         "title": title,
         "task_status": "proposed",
         "approval_required": approval_required,
-        "note": "Task created with status 'proposed'. Type 1 tasks wait for the owner to approve them (dashboard or /task-approve); the model cannot approve."
+        "action_tool": action_tool,
+        "note": note,
     }, ignored=_ignored("ceo_task_create", args))
 
 
@@ -795,8 +814,8 @@ def ceo_task_list(args, **kwargs):
     }, ignored=_ignored("ceo_task_list", args))
 
 
-def ceo_task_assign(args, **kwargs):
-    """Assign a task to an owner/profile and optionally a model route."""
+def ceo_task_complete(args, **kwargs):
+    """Mark a running task completed. Completed is NOT verified."""
     args, bad = _prep(args)
     if bad:
         return bad
@@ -804,7 +823,55 @@ def ceo_task_assign(args, **kwargs):
         from . import tasks
     except ImportError:
         import tasks
-    
+
+    task_id, e = _text(args, "task_id")
+    if e:
+        return _err("Need task_id")
+    completed_by, e = _text(args, "completed_by", required=False)
+    if e:
+        return e
+
+    task = tasks.get_task(task_id)
+    if not task:
+        return _err(f"Task {task_id} not found")
+
+    # The legal-transition table allows completed only from running: a
+    # proposed/approved/assigned task has not started, blocked/failed goes
+    # back through running, and terminal states never move again.
+    status = task.get("status")
+    if status != "running":
+        if status in ("completed", "verified", "rejected"):
+            return _err(f"Task is already '{status}'. A {status} task cannot be completed again.")
+        return _err(f"Task is '{status}', not 'running'. Only a running task can be marked complete.")
+
+    ok = tasks.complete_task(task_id, actor=completed_by or "owner", note="Marked complete from chat")
+    if not ok:
+        return _err("Failed to complete task (it may have moved already)")
+
+    return _ok({
+        "task_id": task_id,
+        "task_status": "completed",
+        "completed_by": completed_by or "owner",
+        "note": "Task completed — completed, not verified. Verification is a separate step (completed -> verified).",
+    }, ignored=_ignored("ceo_task_complete", args))
+
+
+def ceo_task_assign(args, **kwargs):
+    """Assign a task to an owner/profile and optionally a model route.
+
+    Duplicate protection: re-assigning the same owner is an idempotent
+    no-op (nothing changes, no duplicate work); assigning a different
+    owner while the task is already assigned is a conflict, not an
+    overwrite. Assign stays staging only, never a security boundary.
+    """
+    args, bad = _prep(args)
+    if bad:
+        return bad
+    try:
+        from . import tasks
+    except ImportError:
+        import tasks
+
     task_id, e = _text(args, "task_id")
     if e:
         return _err("Need task_id")
@@ -812,24 +879,27 @@ def ceo_task_assign(args, **kwargs):
     if e:
         return _err("Need owner")
     model_route = args.get("model_route")
-    
-    task = tasks.get_task(task_id)
-    if not task:
-        return _err(f"Task {task_id} not found")
-    
-    if task.get("status") not in ("approved", "proposed"):
-        return _err(f"Task is in '{task.get('status')}' state. Can only assign approved/proposed tasks.")
-    if task.get("approval_required") and task.get("status") != "approved":
-        return _err("Type 1 task is waiting for owner approval; it cannot be assigned until the owner approves it.")
-    
-    ok = tasks.assign_task(task_id, owner, model_route)
-    if not ok:
-        return _err("Failed to assign task")
 
-    # Assign binds an owner and activates the task: proposed/approved -> assigned.
-    # (The raw update_task_status() table refuses proposed -> assigned, so the
-    # assign operation has its own transition in tasks.move_to_assigned.)
-    tasks.move_to_assigned(task_id, actor=owner, note=f"Assigned to {owner}")
+    outcome, task = tasks.try_assign_task(task_id, owner, model_route, actor=owner)
+    if outcome == "not_found":
+        return _err(f"Task {task_id} not found")
+    if outcome == "refused":
+        return _err(f"Task is in '{task.get('status')}' state. Can only assign approved/proposed tasks.")
+    if outcome == "awaiting_approval":
+        return _err("Type 1 task is waiting for owner approval; it cannot be assigned until the owner approves it.")
+    if outcome == "conflict":
+        return _err(
+            f"Task is already assigned to '{task.get('owner')}'. "
+            f"Assigning it to '{owner}' would overwrite the owner — refused. "
+            "The task keeps its current owner.")
+    if outcome == "already_assigned":
+        return _ok({
+            "task_id": task_id,
+            "owner": owner,
+            "model_route": task.get("model_route"),
+            "task_status": "assigned",
+            "note": f"Already assigned to '{owner}' — nothing changed.",
+        }, ignored=_ignored("ceo_task_assign", args))
 
     return _ok({
         "task_id": task_id,

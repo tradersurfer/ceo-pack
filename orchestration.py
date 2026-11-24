@@ -753,35 +753,92 @@ def _step(n, tool, seat, verify_by, approval_required=False):
     }
 
 
-def _pick_model(model_key):
-    """Resolve the model choice without crashing the plan on a bad key."""
+# Fallback mirror of models.COST_MODE_KEYS, used only when the models
+# module cannot be imported. Keep in sync with models.py.
+_COST_MODE_KEYS_FALLBACK = {
+    "free": ["free_default", "free_worker", "free_worker_2", "free_random"],
+    "paid_value": ["paid_value", "free_default", "free_worker",
+                   "free_worker_2", "free_random"],
+    "paid_flagship": ["paid_flagship", "paid_value", "free_default",
+                      "free_worker", "free_worker_2", "free_random"],
+}
+
+
+def _permitted_model_keys(cost_mode):
+    """Permitted model keys for a cost mode, from models.COST_MODE_KEYS
+    (local fallback mirror when the models module cannot be imported)."""
     try:
-        if model_key:
-            try:
-                from .models import get_model
-            except ImportError:
-                from models import get_model
-            exact = get_model(model_key)
-            if exact is not None:
-                return {
-                    "recommended": exact,
-                    "rule": "Model chosen by install config. CEO seat gets the orchestration model; workers get fast, narrow models.",
-                    "fallbacks": [],
-                }
-        if not model_key or model_key == "free_default":
-            return choose_model(task_type="ceo")
-        budget = model_key if str(model_key).startswith("paid") else "free"
-        return choose_model(task_type="ceo", budget=budget)
-    except Exception:  # unknown key -> fall back to the safe default
-        return choose_model(task_type="ceo")
+        try:
+            from .models import keys_for_cost_mode
+        except ImportError:
+            from models import keys_for_cost_mode
+        return keys_for_cost_mode(cost_mode)
+    except Exception:
+        mode = cost_mode.strip().lower() if isinstance(cost_mode, str) else ""
+        return list(_COST_MODE_KEYS_FALLBACK.get(mode, []))
 
 
-def plan_tool_calls(goal, model_key="free_default"):
+def _pick_model(model_key, cost_mode=None):
+    """Resolve the model choice under the cost boundary — never silently substitute.
+
+    cost_mode defaults to the installed cost_mode. Rules (Chat #5):
+    - no model supplied -> the cost mode picks its default (free ->
+      free_default, paid_value -> paid_value, paid_flagship ->
+      paid_flagship, via choose_model's budget mapping).
+    - a supplied key must exist AND be permitted under the cost mode.
+    - anything else -> {"valid": False, "error": ...}: a clean rejection
+      naming the model, the cost mode, and the permitted keys. The caller
+      (plan_tool_calls) turns it into an error envelope; no default is
+      silently substituted and nothing crashes.
+    A model catalog that cannot be imported at all (standalone checkout
+    with the test stand-in) still resolves the cost mode's default the old
+    way — nothing can be validated there, so nothing is substituted either.
+    """
+    try:
+        try:
+            from .models import get_model, MODELS
+        except ImportError:
+            from models import get_model, MODELS
+    except ImportError:
+        mode = (cost_mode if cost_mode is not None else INSTALL.get("cost_mode") or "free")
+        mode = str(mode).strip().lower()
+        if mode not in _COST_MODES:
+            mode = "free"
+        return choose_model(task_type="ceo", budget=mode)
+    mode = (cost_mode if cost_mode is not None else INSTALL.get("cost_mode") or "free")
+    mode = str(mode).strip().lower()
+    if mode not in _COST_MODES:
+        return {"valid": False, "status": "error",
+                "error": "Unknown cost_mode %r. Valid: %s." % (mode, ", ".join(_COST_MODES))}
+    permitted = _permitted_model_keys(mode)
+    if not model_key:
+        return choose_model(task_type="ceo", budget=mode)
+    key = str(model_key).strip()
+    exact = get_model(key)
+    if exact is None:
+        return {"valid": False, "status": "error",
+                "error": "Unknown model key %r. Valid keys: %s. No model was substituted."
+                         % (key, ", ".join(m["key"] for m in MODELS))}
+    if key not in permitted:
+        return {"valid": False, "status": "error",
+                "error": "Model %r is not allowed under cost_mode %r. Permitted: %s. "
+                         "Raise cost_mode or pick a permitted model — nothing was substituted."
+                         % (key, mode, ", ".join(permitted))}
+    return {
+        "recommended": exact,
+        "rule": "Model chosen by install config. CEO seat gets the orchestration model; workers get fast, narrow models.",
+        "fallbacks": [],
+    }
+
+
+def plan_tool_calls(goal, model_key="free_default", cost_mode=None):
     """Return an ordered orchestration plan for a goal."""
     if not isinstance(goal, str) or not goal.strip():
         return {"valid": False, "error": "A non-empty goal is required to plan.", "status": "error"}
 
-    model = _pick_model(model_key)
+    model = _pick_model(model_key, cost_mode)
+    if not model.get("valid", True):
+        return {"valid": False, "error": model.get("error", "Model choice was refused."), "status": "error"}
     head = HEAD_SEAT
     steps = [
         _step(1, "ceo_brief", head, "Brief states goal, decision needed, and approval gate."),
@@ -932,6 +989,36 @@ def infer_risk(arguments):
     return sorted(flag for flag, pattern in _RISK_CUES.items() if pattern.search(blob))
 
 
+
+def _call_strings(value, out, depth=0):
+    """Every string value in a host tool call's arguments, depth-first,
+    bounded (depth 6, 60 strings) so a huge payload cannot stall the hook."""
+    if len(out) >= 60 or depth > 6:
+        return
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, dict):
+        for v in value.values():
+            _call_strings(v, out, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            _call_strings(v, out, depth + 1)
+
+
+def infer_risk_in_call(arguments):
+    """Same risk cues as infer_risk, read over EVERY string value of a
+    host tool call (send_email body, terminal command, file content…),
+    not just the planning fields. Used by the Type 1 gate at the
+    execution boundary, where host tools never carry task/goal/notes.
+    Cues can raise a call to Type 1, never lower it; a miss is not proof
+    of Type 2."""
+    if not isinstance(arguments, dict):
+        return []
+    texts = []
+    _call_strings(arguments, texts)
+    blob = " . ".join(t[:2000] for t in texts)
+    return sorted(flag for flag, pattern in _RISK_CUES.items() if pattern.search(blob))
+
 def _fail(tool_name, message, retryable=True):
     return {
         "valid": False,
@@ -956,11 +1043,12 @@ def _check_due_date(value, today=None):
     return True, None
 
 
-def make_tool_call(tool_name, arguments, seat="CEO", risk=None, today=None):
+def make_tool_call(tool_name, arguments, seat="CEO", risk=None, today=None, db_path=None):
     """Validate a tool call envelope. This does not execute an external tool.
 
     risk  — optional dict of Type 1 flags (see RISK_FLAGS) for this specific call.
     today — injectable date, for tests.
+    db_path — registry path for the advisory ticket lookup (None = default).
     """
     if tool_name not in ALLOWED_TOOLS:
         return _fail(tool_name,
@@ -1045,6 +1133,18 @@ def make_tool_call(tool_name, arguments, seat="CEO", risk=None, today=None):
         envelope["gate"] = "STOP: owner approval required for this item before dispatch."
     if warnings:
         envelope["warnings"] = warnings
+    # Stage 1 gate (warn/observe only): advisory ticket state for this
+    # exact call, so the agent can see before dispatching whether a
+    # one-time ticket exists. Advisory only — never enforcement, never
+    # raises; any lookup failure degrades to "none".
+    try:
+        try:
+            from . import tasks as _tasks
+        except ImportError:  # direct-module load (tests load files individually)
+            import tasks as _tasks
+        envelope["token_status"] = _tasks.token_status_for(tool_name, arguments, db_path=db_path)
+    except Exception:
+        envelope["token_status"] = "none"
     return envelope
 
 
@@ -1160,6 +1260,8 @@ def apply_install_config(cfg):
     applied, notes = [], []
     if not isinstance(cfg, dict):
         return applied, ["install config was not an object; nothing applied."]
+    _prev_cost_mode = INSTALL["cost_mode"]
+    _prev_model_choice = INSTALL["model_choice"]
     for key in ("business_name", "owner_name"):
         val = cfg.get(key)
         if isinstance(val, str) and val.strip():
@@ -1198,6 +1300,29 @@ def apply_install_config(cfg):
             applied.append("model_choice")
         else:
             notes.append("model_choice %r refused. Valid keys: %s." % (val, ", ".join(keys)))
+    # Cost/model precedence (Chat #5): the effective model_choice must be
+    # permitted under the effective cost_mode. When the combination is
+    # incompatible, refuse the value that created it and keep the previous
+    # one — never silently substitute a model. A config that changes
+    # neither value cannot create an incompatibility, so it is never
+    # refused here. When both were supplied and clash, the model loses:
+    # the cost mode is the policy, the model is the request.
+    permitted = _permitted_model_keys(INSTALL["cost_mode"])
+    if INSTALL["model_choice"] not in permitted:
+        if "model_choice" in applied:
+            notes.append(
+                "model_choice %r refused: cost_mode %r permits only %s. "
+                "Raise cost_mode or pick a permitted model."
+                % (INSTALL["model_choice"], INSTALL["cost_mode"], ", ".join(permitted)))
+            INSTALL["model_choice"] = _prev_model_choice
+            applied.remove("model_choice")
+        elif "cost_mode" in applied:
+            notes.append(
+                "cost_mode %r refused: current model_choice %r is not permitted under it. "
+                "Permitted: %s. Change model_choice first."
+                % (INSTALL["cost_mode"], INSTALL["model_choice"], ", ".join(permitted)))
+            INSTALL["cost_mode"] = _prev_cost_mode
+            applied.remove("cost_mode")
     if cfg.get("approval_required") is False:
         notes.append("approval_required=false was NOT applied: Type 1 actions always stop for the owner.")
     aliases = {}

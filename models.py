@@ -24,18 +24,6 @@ MODELS = [
         "limits": "OpenRouter free: 20 requests/min, plus 50 requests/day until $10 of credits are bought, then 1,000/day. A CEO task uses many requests — one per tool round-trip — so plan around that. Data caution (live check Nov 5, 2026): the NVIDIA free host is listed as 'May train' / prompts logged — do not send client books through the free route.",
     },
     {
-        "key": "free_fallback",
-        "label": "Free fallback — fast daily CEO",
-        "openrouter_id": None,
-        "zen_id": "glm-5.3-flash-free",
-        "size": "Flash-class",
-        "context": "Check live provider page",
-        "cost": "free",
-        "best_for": "Faster, lighter CEO work when the 550B default is slow or rate-limited",
-        "tool_calling": "Supported. Reported in the Nov 4 check as zero-retention / no-training on Zen, alongside DeepSeek V4.1 Flash Free — verify live before handling sensitive books.",
-        "limits": "Free-model retention and training policies differ by provider. Verify before sending client books.",
-    },
-    {
         "key": "free_worker",
         "label": "Free workers — narrow jobs",
         "openrouter_id": "nvidia/nemotron-3.5-lightning:free",
@@ -44,19 +32,19 @@ MODELS = [
         "context": "1,000,000 tokens (free endpoint)",
         "cost": "free",
         "best_for": "Fast, narrow worker jobs: one tool, one answer, one check",
-        "tool_calling": "Supported. Also in the #009 free-tier set, with inclusionai/ling-3.1-flash:free as a second worker option (bare ID is paid). Live check Nov 5, 2026: answered all test calls on Nov 3 and 7/7 daily checks; NVIDIA host 'May train'.",
+        "tool_calling": "Supported. Also in the #009 free-tier set, with inclusionai/ling-3.2-flash:free as a second worker option (bare ID is paid). Live check Nov 5, 2026: answered all test calls on Nov 3 and 7/7 daily checks; NVIDIA host 'May train'.",
         "limits": "Do not put a small fast worker in the CEO seat. Workers execute; the CEO orchestrates. Slug corrected Nov 5, 2026: the bare 'nemotron-3.5-lightning' in the earlier draft is not a valid OpenRouter ID — it needs the nvidia/ prefix and :free suffix.",
     },
     {
         "key": "free_worker_2",
         "label": "Free worker 2",
-        "openrouter_id": "inclusionai/ling-3.1-flash:free",
+        "openrouter_id": "inclusionai/ling-3.2-flash:free",
         "zen_id": None,
         "size": "Flash-class",
-        "context": "262,144 tokens",
+        "context": "1,048,576 tokens",
         "cost": "free (:free suffix)",
         "best_for": "Fast, narrow worker jobs",
-        "tool_calling": "Supported, from the #009 free-tier set. CORRECTED v0.4.0 (Nov 12, 2026): the bare ID inclusionai/ling-3.1-flash is PAID (price varies by provider — do not quote one). The free variant is inclusionai/ling-3.1-flash:free. Do NOT use the bare ID as a free pick. Re-verify live before use, free slugs turn over fast.",
+        "tool_calling": "Supported, from the #009 free-tier set. CORRECTED Nov 20, 2026: the free variant moved — inclusionai/ling-3.1-flash:free is GONE from the live OpenRouter list (the bare ID inclusionai/ling-3.1-flash is PAID). The live free variant is inclusionai/ling-3.2-flash:free, released Nov 13, 2026, verified $0 / 1M context / tool-calling on Nov 20, 2026. Do NOT use a bare ID as a free pick. Re-verify live before use, free slugs turn over fast.",
         "limits": "Worker only, not a CEO default. Free only with the :free suffix; the bare ID is paid.",
     },
     {
@@ -100,6 +88,35 @@ MODELS = [
 DEFAULT_MODEL_KEY = "free_default"
 
 
+# Cost-mode ceilings (Chat decision #5, Nov 2026): a cost mode permits its
+# own tier and everything cheaper — it is a ceiling, not an exact tier.
+# Explicit model selection never overrides the cost boundary: an
+# incompatible request is rejected with the permitted keys named, never
+# silently substituted with a cheaper model.
+COST_MODE_KEYS = {
+    # Free buys only free models.
+    "free": ["free_default", "free_worker", "free_worker_2", "free_random"],
+    # Paid value buys the value model plus anything free.
+    "paid_value": ["paid_value", "free_default", "free_worker",
+                   "free_worker_2", "free_random"],
+    # Paid flagship buys everything.
+    "paid_flagship": ["paid_flagship", "paid_value", "free_default",
+                      "free_worker", "free_worker_2", "free_random"],
+}
+
+
+def keys_for_cost_mode(cost_mode):
+    """Permitted model keys for a cost mode, [] when the mode is unknown."""
+    if not isinstance(cost_mode, str):
+        return []
+    return list(COST_MODE_KEYS.get(cost_mode.strip().lower(), []))
+
+
+def model_allowed_for_cost_mode(model_key, cost_mode):
+    """True when the model key is permitted under the cost mode."""
+    return model_key in keys_for_cost_mode(cost_mode)
+
+
 def get_model(key):
     for model in MODELS:
         if model["key"] == key:
@@ -124,7 +141,7 @@ def choose_model(task_type="ceo", budget="free"):
     else:
         key = "free_default"
     model = get_model(key)
-    fallbacks = ["free_fallback", "free_random"] if key.startswith("free") else ["free_default", "free_fallback"]
+    fallbacks = ["free_worker", "free_random"] if key.startswith("free") else ["free_default", "free_worker"]
     return {
         "recommended": model,
         "fallbacks": [get_model(k) for k in fallbacks],

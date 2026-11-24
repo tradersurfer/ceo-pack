@@ -1,8 +1,8 @@
 """v0.5.0 registration tests: register() against a fake ctx with the
 REAL host method set.
 
-Asserts the exact tool set (21) from plugin.yaml equals what registers,
-the 29 commands, the hook, the delegation provider, the CLI command and
+Asserts the exact tool set (22) from plugin.yaml equals what registers,
+the 30 commands, the hook, the delegation provider, the CLI command and
 the skills. Fictional data only; the task DB is a temp file.
 """
 
@@ -25,6 +25,7 @@ EXPECTED_COMMANDS = {
     "daily-checks", "eod-checks", "performance-checks", "status-check",
     "roster",
     "task-create", "task-status", "task-list", "task-approve", "task-assign",
+    "task-complete",
     "run-create", "run-status",
     "ceo delegation",
 }
@@ -106,9 +107,9 @@ class TestRegistration(unittest.TestCase):
         declared = self.manifest["provides_tools"]
         registered = sorted(self.ctx.tools)
         self.assertEqual(registered, sorted(declared))
-        self.assertEqual(len(registered), 20)
+        self.assertEqual(len(registered), 21)
         self.assertNotIn("ceo_task_approve", registered)   # approval is owner-only
-        self.assertEqual(self.manifest["version"], "0.5.0")
+        self.assertEqual(self.manifest["version"], "0.6.0")
 
     def test_every_tool_has_schema_and_callable_handler(self):
         for name, entry in self.ctx.tools.items():
@@ -118,11 +119,13 @@ class TestRegistration(unittest.TestCase):
                 self.assertEqual(entry["schema"].get("name"), name)
                 self.assertTrue(callable(entry["handler"]))
 
-    def test_command_set_is_exactly_29(self):
+    def test_command_set_is_exactly_30(self):
         self.assertEqual(set(self.ctx.commands), EXPECTED_COMMANDS)
-        self.assertEqual(len(self.ctx.commands), 29)
+        self.assertEqual(len(self.ctx.commands), 30)
 
     def test_hook_registered(self):
+        # Stage 1 gate (warn/observe only): pre_tool_call joined
+        # post_tool_call; the pinned list is the exact hook set.
         self.assertEqual([name for name, _ in self.ctx.hooks],
                          ["post_tool_call", "pre_tool_call"])
 

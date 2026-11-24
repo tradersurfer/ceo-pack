@@ -373,7 +373,7 @@ class LingFix(unittest.TestCase):
     def test_bare_ling_not_listed_as_free(self):
         from models import get_model
         worker2 = get_model("free_worker_2")
-        self.assertEqual(worker2["openrouter_id"], "inclusionai/ling-3.1-flash:free")
+        self.assertEqual(worker2["openrouter_id"], "inclusionai/ling-3.2-flash:free")
         self.assertNotIn("zero-priced, no :free suffix", worker2["cost"])
 
 
@@ -414,9 +414,10 @@ class SlashCommandsRegistered(unittest.TestCase):
                              "q1", "q2", "q3", "monthly-closeout", "daily-checks", "eod-checks",
                              "performance-checks", "status-check", "roster",
                              "task-create", "task-status", "task-list", "task-approve", "task-assign",
+                             "task-complete",
                              "run-create", "run-status", "ceo delegation"]:
             self.assertIn(name, seen, name)
-        self.assertEqual(len(seen), 29)
+        self.assertEqual(len(seen), 30)
 
 
 if __name__ == "__main__":

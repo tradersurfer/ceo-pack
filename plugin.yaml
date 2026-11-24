@@ -1,10 +1,11 @@
 name: ceo-pack
-version: 0.5.0
+version: 0.6.0
 manifest_version: 2
-description: CEO Pack gives you an AI C-suite inside Hermes. You say what your business needs in plain words, and the pack turns it into a plan — it works out which seat should own each job (money, legal, marketing, tech, operations, or the chief of staff), assigns it, and checks the work before calling it done. Anything big, priced, or hard to undo stops and asks for your approval first, so you stay the boss. v0.5.0 adds a dashboard tab, a persistent task registry, and delegation you can configure from chat. For developers — stdlib-only, no network calls and no model calls. The plugin routes and verifies work on your Hermes model, suggests a free model by default, and keeps every task, decision, and run in a local registry.
+description: CEO Pack gives you an AI C-suite inside Hermes. You say what your business needs in plain words, and the pack turns it into a plan — it works out which seat should own each job (money, legal, marketing, tech, operations, or the chief of staff), assigns it, and checks the work before calling it done. Anything big, priced, or hard to undo stops and asks for your approval first, so you stay the boss. v0.5.0 added a dashboard tab, a persistent task registry, and delegation you can configure from chat. v0.6.0 adds a chat panel per seat on the dashboard and a Type 1 gate on host tool calls (warn mode, nothing blocked yet). For developers — stdlib-only, no network calls and no model calls. The plugin routes and verifies work on your Hermes model, suggests a free model by default, and keeps every task, decision, and run in a local registry.
 author: tradersurfer93
 license: MIT
-requires_hermes: ">=0.22.5"
+requires_hermes: ">=0.23.0"
+thumbnail: assets/ceo-pack-cover-v060.webp
 provides_tools:
   - ceo_brief
   - ceo_assign
@@ -24,6 +25,7 @@ provides_tools:
   - ceo_task_status
   - ceo_task_list
   - ceo_task_assign
+  - ceo_task_complete
   - ceo_run_create
   - ceo_run_status
 provides_hooks:
@@ -33,7 +35,7 @@ config_schema:
   business_name: {type: str, default: "", label: "Business name", description: "Your business name, entered on install. Nothing is shipped with the plugin."}
   owner_name: {type: str, default: "", label: "Owner name", description: "The human owner who approves external actions."}
   approval_required: {type: bool, default: true, label: "Require owner approval for external actions"}
-  model_choice: {type: str, default: "free_default", label: "Model choice", description: "free_default (Nemotron 3 Ultra free), free_fallback (GLM Flash free), free_worker, paid_value, or paid_flagship. Free lineups change — verify live."}
+  model_choice: {type: str, default: "free_default", label: "Model choice", description: "free_default (Nemotron 3 Ultra free), free_worker, free_worker_2, paid_value, or paid_flagship. Free lineups change — verify live."}
   model_provider: {type: str, default: "auto", label: "Model provider", description: "openrouter, zen, nous, or auto."}
   cost_mode: {type: str, default: "free", label: "Cost mode", description: "free, paid_value, or paid_flagship. Paid flagship is an override, not a default."}
   head_seat: {type: str, default: "CEO", label: "Head seat", description: "The seat that holds priorities and the decision log. Default CEO. The human owner is still the final approval gate."}

@@ -1,7 +1,7 @@
 # CEO Pack Dashboard — API Contract (v0.5.0)
 
 Base: `/api/plugins/ceo-pack/` — mounted by the Hermes dashboard host from
-`dashboard/plugin_api.py` (`router`). **Reads are GET; writes are four
+`dashboard/plugin_api.py` (`router`). **Reads are GET; writes are five
 POST routes** (below) that call the same `tasks.py` functions the chat
 tools call. The host authenticates every `/api/` call, so the dashboard
 caller is an authenticated Hermes user (the owner).
@@ -54,11 +54,37 @@ ever returned. A `POST`/`PUT`/`PATCH`/`DELETE` to any other path returns
 | `POST /tasks` | `tasks.create_task` | Body `{run_id, seat, title, due_date?, description?, task_key?, owner?, model_route?, approval_required?, risk_flags?, parent_task_id?, metadata?}`. Missing/invalid required text → 400; unknown seat → 400; unknown `run_id` → 400 (the dashboard only offers existing runs); bad `due_date` → 400. `task_key` is idempotent per run: a repeat returns the existing task. Seat is canonicalized (`cfo` → `CFO`). |
 | `POST /tasks/{id}/approve` | `tasks.approve_task` | Task must exist → 404. Must be Type 1 (`approval_required`) → 409. Must be `proposed` → 409. `approved_by` is `"owner"`; the history note records the dashboard origin. |
 | `POST /tasks/{id}/reject` | `tasks.update_task_status(…, "rejected")` | Task must exist → 404. Must be `proposed` → 409. Optional body `{note?}`. History actor `"owner (dashboard)"`. Terminal — nothing exits `rejected`. |
-| `POST /tasks/{id}/assign` | `tasks.assign_task` + `move_to_assigned` | Body `{owner, model_route?}`. Owner is required text → 400 (mirrors the chat tool, which takes any owner text; the UI offers seats). Task must exist → 404. Status must be `approved`/`proposed` → 409. History actor `"owner (dashboard)"`. |
+| `POST /tasks/{id}/assign` | `tasks.try_assign_task` | Body `{owner, model_route?}`. Owner is required text → 400 (mirrors the chat tool, which takes any owner text; the UI offers seats). Task must exist → 404. Status must be `approved`/`proposed` → 409; a task already `assigned` to the SAME owner returns 200 unchanged (idempotent re-assign); assigned to a DIFFERENT owner → 409, owner unchanged, no overwrite. History actor `"owner (dashboard)"`. |
+| `POST /tasks/{id}/complete` | `tasks.complete_task` | Task must exist → 404. Must be `running` → 409 otherwise (proposed/approved/assigned has not started; blocked/failed goes back through running; completed/verified/rejected is already terminal). History actor `"owner (dashboard)"`. Completed is NOT verified — verification is a separate step with no tool yet. |
 
 Concurrency: the agent process and the web-server process both write the
 registry now. `_connect` sets `PRAGMA journal_mode=WAL` + a 10s busy
 timeout; a still-contended write surfaces as 503, never a hang or a 500.
+
+## Chat bin (web v1) — no new plugin routes
+
+The chat bin is a docked panel beside the tab content on all 4 tabs. It
+adds **zero** routes to this API: the dashboard JS calls the host's own
+session/chat endpoints directly through the sanctioned SDK — `SDK.fetchJSON`
+for `GET /api/sessions`, `GET /api/sessions/{id}/messages`,
+`GET /api/chat/workspaces`, and `SDK.buildWsUrl` for `/api/ws` (which
+mints a fresh single-use ticket per connect; the bin never hand-rolls a WS
+URL and never reads `window.__HERMES_SESSION_TOKEN__`). The one existing
+plugin route the bin leans on is `GET /roster` (seat → profile mapping).
+The vendored NDJSON JSON-RPC client (`CeoChatWire` in `dashboard/dist/index.js`)
+speaks the host's session methods (`session.create` with `source:
+'ceo-pack'`, a UUID `idempotency_key`, `close_on_disconnect: false`;
+`session.resume`; `prompt.submit`; `session.interrupt`;
+`session.events.since` for gap replay) and renders `message.delta`
+streams, compact tool rows, and collapsed subagent lines. One active
+session per seat + a Recent list of 5; resume renders the latest 50
+messages with "Load earlier" paging via REST. The gate indicator in the
+panel header reads `session.info`'s tool map at runtime (ceo_* tools
+present = Gate on; absent = Gate off in this profile); warn mode is never
+described as enforcement. Desktop is web-only in v1: the Desktop page
+links out to the web Sessions page (`http://localhost:9119/sessions`,
+default gateway port) via `ctx.os.openExternal` — no composer, no second
+chat client.
 
 ## Endpoints
 
@@ -116,7 +142,8 @@ Query params: `status`, `seat`, `run_id` (text filters), `limit`
 
 Task object fields: `task_id` (= `id`), `run_id`, `task_key`, `seat`,
 `title`, `description`, `status`, `priority`, `owner`, `model_route`,
-`due_date`, `created_at`, `updated_at`, `started_at`, `completed_at`,
+`due_date`, `overdue` (derived at read time, never stored: non-terminal
+and due before today), `created_at`, `updated_at`, `started_at`, `completed_at`,
 `approved_at`, `approved_by`, `approval_required`, `risk_flags`,
 `retry_count`, `max_retries`, `parent_task_id`, `execution` (see below).
 
@@ -167,6 +194,25 @@ with per-run `task_count` and `status_counts` (computed from
 | `history[]` | `tasks.get_approval_history(50)` — history events where a task moved to `approved` (actor + timestamp). |
 | `decisions_note` | States plainly that free-form decisions logged in chat with `ceo_decision_log` are **not** stored by the plugin in v0.5.0; approval history here comes from the task registry. |
 
+Pending tasks carry `action_tool` / `action_args_hash` when the task
+names the exact action it will execute (hash only, never argument
+values). The approve route accepts optional `tool_name` + `arguments`
+in the body and returns `token_minted` / `token_id` for the ticket it
+minted (Stage 1 gate, warn mode — see `GET /gate-decisions`).
+
+### `GET /gate-decisions` — Type 1 gate audit log (Stage 1, warn/observe only)
+Query param: `limit` (integer 0–100, default 50). Returns the newest
+`gate_audit` rows first: `at`, `decision` (`would_allow` | `would_block` |
+`token_minted` | `token_revoked` | `hook_error`), `tool_name`,
+`args_hash` (SHA-256 of the canonical arguments — never the values),
+`task_id`, `token_id`, `approved_by`, `actor`, `session_id`, `reason`
+(`token_match` | `no_token` | `token_expired` | `token_used` |
+`token_revoked` | `modified_arguments` | `registry_unavailable` |
+`hook_error` | `uncertain_classification`), `mode` (`"warn"` in Stage 1).
+Warn mode is NOT enforcement: `would_block` means the gate would have
+stopped the call under Stage 2 rules; nothing was actually blocked and
+no ticket was consumed.
+
 ## Known limitations
 
 - **Roster snapshot freshness:** the snapshot is written when the plugin
@@ -180,6 +226,10 @@ with per-run `task_count` and `status_counts` (computed from
 - **Decision log:** free-form `ceo_decision_log` entries are not
   persisted (stateless tool). The approval center shows pending approvals
   and approval transitions from the registry only.
+- **Completed is not verified:** `ceo_task_complete` / `POST
+  /tasks/{id}/complete` moves a running task to `completed` only. There
+  is no verify tool yet — the `completed -> verified` step has no caller,
+  so a task stays `completed` until one exists.
 - **Profiles share one registry:** the task DB path is not
   profile-aware (pre-existing v0.5.0 behavior) — the dashboard shows the
   same registry the tools write, across profiles.

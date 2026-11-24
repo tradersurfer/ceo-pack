@@ -140,8 +140,14 @@ class TestPlan(unittest.TestCase):
     def test_empty_goal_is_an_error(self):
         self.assertFalse(o.plan_tool_calls("  ")["valid"])
 
-    def test_bad_model_key_falls_back(self):
-        self.assertIn("model", o.plan_tool_calls("x", model_key="nonsense"))
+    def test_bad_model_key_is_rejected_not_substituted(self):
+        # Chat #5: an unknown model key is a clean rejection, never a
+        # silent fallback to the default.
+        plan = o.plan_tool_calls("x", model_key="nonsense")
+        self.assertFalse(plan["valid"])
+        self.assertIn("nonsense", plan["error"])
+        self.assertIn("No model was substituted", plan["error"])
+        self.assertNotIn("model", plan)
 
 
 class TestRetryAndVerify(unittest.TestCase):

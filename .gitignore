@@ -5,6 +5,6 @@ __pycache__/
 local-business/
 private/
 *.mp4
-*.jpg
-*.jpeg
-*.png
+# *.jpg
+# *.jpeg
+# *.png

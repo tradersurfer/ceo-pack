@@ -6,9 +6,9 @@ the agent process writes at registration). Nothing is invented: an empty
 registry returns empty lists and zero counts with an explicit empty flag,
 never fabricated activity.
 
-Writes exist, but only as four POST routes that call the same tasks.py
-functions the chat tools call (create_task, approve_task, assign_task +
-move_to_assigned, update_task_status) — the same lifecycle + permission
+Writes exist, but only as five POST routes that call the same tasks.py
+functions the chat tools call (create_task, approve_task, try_assign_task,
+complete_task, update_task_status) — the same lifecycle + permission
 checks, the same SQLite registry, the same history audit. The host
 authenticates every /api/ call, so the dashboard caller is an
 authenticated Hermes user (the owner). A second task engine in the
@@ -34,7 +34,7 @@ import json
 import logging
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -142,17 +142,35 @@ def _seed_roster() -> bool:
         return False
 
 
+def _is_overdue(task: dict) -> bool:
+    """Derived at read time, never stored: a non-terminal task whose due
+    date is before today. Same rule the frontends used to compute locally
+    (web isOverdue / Desktop isOverdue) — the backend flag is now the one
+    source of truth, so the frontends read it instead of recomputing."""
+    status = task.get("status")
+    due = task.get("due_date")
+    if not due or status in ("completed", "verified", "failed", "rejected"):
+        return False
+    try:
+        return date.fromisoformat(str(due)) < date.today()
+    except ValueError:
+        return False
+
+
 def _public_task(task: dict) -> dict:
     """Task row safe for the API: state only, no result/error payloads.
 
     ``execution`` is the validated delegated-execution record (Phase 3):
     the host-reported route / tokens / cost for the task's delegate run,
     or None when nothing was recorded. ``metadata`` itself stays stripped.
+    ``overdue`` is derived at read time from due_date + status (never
+    stored): a non-terminal task whose due date is before today.
     """
     out = {k: v for k, v in task.items() if k not in _TASK_STRIP}
     out["task_id"] = task.get("id")
     exec_rec = _tasks.execution_from_metadata(task.get("metadata")) if _tasks else {}
     out["execution"] = exec_rec or None
+    out["overdue"] = _is_overdue(task)
     return out
 
 
@@ -426,6 +444,26 @@ def approvals():
     }
 
 
+@router.get("/gate-decisions")
+def gate_decisions(limit: int = 50):
+    """The Type 1 gate's audit log, newest first — what the gate WOULD
+    have stopped (warn mode) and what it allowed on a ticket. Same shape
+    as /activity's history rows. Only hashes are ever returned, never
+    argument values."""
+    _require_db()
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be an integer from 0 to 100.")
+    try:
+        decisions = _tasks.get_gate_decisions(limit=limit)
+    except (sqlite3.Error, FileNotFoundError, OSError):
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    return {
+        "generated_at": _now_iso(),
+        "decisions": decisions,
+        "count": len(decisions),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Write routes (POST) — the dashboard acting for the owner.
 #
@@ -497,6 +535,12 @@ def create_task_route(body: dict):
     metadata = body.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):
         raise HTTPException(status_code=400, detail="metadata must be a JSON object.")
+    # Stage 1 gate: optional exact action this task will execute. Stored
+    # as tool name + argument hash only; raw values are never stored.
+    tool_name = _optional_text(body, "tool_name")
+    arguments = body.get("arguments")
+    if arguments is not None and not isinstance(arguments, dict):
+        raise HTTPException(status_code=400, detail="arguments must be a JSON object.")
     try:
         if _tasks.get_task_run(run_id) is None:
             raise HTTPException(status_code=400, detail="unknown run_id")
@@ -513,6 +557,8 @@ def create_task_route(body: dict):
             risk_flags=risk_flags or [],
             parent_task_id=parent_task_id,
             metadata=metadata or {},
+            tool_name=tool_name,
+            arguments=arguments,
         )
         task = _tasks.get_task(task_id)
     except HTTPException:
@@ -525,20 +571,41 @@ def create_task_route(body: dict):
 
 
 @router.post("/tasks/{task_id}/approve")
-def approve_task_route(task_id: str):
+def approve_task_route(task_id: str, body: Optional[dict] = None):
     _require_db()
     task = _write_task_or_404(task_id)
     if not task.get("approval_required"):
         raise HTTPException(status_code=409, detail="Task does not require approval (not a Type 1 task)")
     if task.get("status") != "proposed":
         raise HTTPException(status_code=409, detail="Task is in '%s' state, not 'proposed'. Can only approve proposed tasks." % task.get("status"))
+    # Stage 1 gate: optional exact action (tool_name + arguments) in the
+    # body. When given here it is recorded on the task and a one-time
+    # ticket is minted for it; when the task already names an action,
+    # that one is used instead. Raw values are never stored — only the hash.
+    tool_name = None
+    arguments = None
+    if body is not None:
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="request body must be a JSON object.")
+        tool_name = _optional_text(body, "tool_name")
+        arguments = body.get("arguments")
+        if arguments is not None and not isinstance(arguments, dict):
+            raise HTTPException(status_code=400, detail="arguments must be a JSON object.")
     try:
-        ok = _tasks.approve_task(task_id, "owner", note="Type 1 approval granted (dashboard)")
+        ok = _tasks.approve_task(task_id, "owner", note="Type 1 approval granted (dashboard)",
+                                 tool_name=tool_name, arguments=arguments, minted_via="dashboard")
     except sqlite3.Error:
         raise HTTPException(status_code=503, detail="task registry unavailable")
     if not ok:
         raise HTTPException(status_code=409, detail="Task could not be approved (it may have moved already)")
-    return _public_task(_tasks.get_task(task_id))
+    stored = _tasks.get_task(task_id)
+    public = _public_task(stored)
+    action_tool = stored.get("action_tool") if stored else None
+    action_hash = stored.get("action_args_hash") if stored else None
+    token = _tasks.get_live_token(task_id, action_tool, action_hash) if action_tool and action_hash else None
+    public["token_minted"] = bool(token)
+    public["token_id"] = token.get("token_id") if token else None
+    return public
 
 
 @router.post("/tasks/{task_id}/reject")
@@ -565,6 +632,26 @@ def reject_task_route(task_id: str, body: Optional[dict] = None):
     return _public_task(_tasks.get_task(task_id))
 
 
+@router.post("/tasks/{task_id}/complete")
+def complete_task_route(task_id: str, body: Optional[dict] = None):
+    _require_db()
+    task = _write_task_or_404(task_id)
+    status = task.get("status")
+    if status != "running":
+        if status in ("completed", "verified", "rejected"):
+            detail = "Task is already '%s'. A %s task cannot be completed again." % (status, status)
+        else:
+            detail = "Task is '%s', not 'running'. Only a running task can be marked complete." % status
+        raise HTTPException(status_code=409, detail=detail)
+    try:
+        ok = _tasks.complete_task(task_id, actor="owner (dashboard)", note="Marked complete from the dashboard")
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail="task registry unavailable")
+    if not ok:
+        raise HTTPException(status_code=409, detail="Task could not be completed (it may have moved already)")
+    return _public_task(_tasks.get_task(task_id))
+
+
 @router.post("/tasks/{task_id}/assign")
 def assign_task_route(task_id: str, body: dict):
     _require_db()
@@ -573,14 +660,16 @@ def assign_task_route(task_id: str, body: dict):
     owner = _text_field(body, "owner")
     model_route = _optional_text(body, "model_route")
     task = _write_task_or_404(task_id)
-    if task.get("status") not in ("approved", "proposed"):
-        raise HTTPException(status_code=409, detail="Task is in '%s' state. Can only assign approved/proposed tasks." % task.get("status"))
     try:
-        ok = _tasks.assign_task(task_id, owner, model_route)
-        if ok:
-            ok = _tasks.move_to_assigned(task_id, actor="owner (dashboard)", note="Assigned to %s (dashboard)" % owner)
+        outcome, stored = _tasks.try_assign_task(task_id, owner, model_route, actor="owner (dashboard)")
     except sqlite3.Error:
         raise HTTPException(status_code=503, detail="task registry unavailable")
-    if not ok:
-        raise HTTPException(status_code=409, detail="Task could not be assigned (it may have moved already)")
+    if outcome == "refused":
+        raise HTTPException(status_code=409, detail="Task is in '%s' state. Can only assign approved/proposed tasks." % task.get("status"))
+    if outcome == "awaiting_approval":
+        raise HTTPException(status_code=409, detail="Type 1 task is waiting for owner approval; approve it before assigning.")
+    if outcome == "conflict":
+        raise HTTPException(status_code=409, detail="Task is already assigned to '%s'. Assigning it to '%s' would overwrite the owner — refused. The task keeps its current owner." % (stored.get("owner"), owner))
+    # "assigned" and "already_assigned" both return the task; the
+    # already-assigned case changed nothing (idempotent re-assign).
     return _public_task(_tasks.get_task(task_id))

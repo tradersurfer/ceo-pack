@@ -112,7 +112,7 @@ CEO_ORCHESTRATE = {
             "goal": {"type": "string"},
             "model_key": {
                 "type": "string",
-                "description": "Optional model choice key: free_default, free_fallback, free_worker, paid_value, paid_flagship.",
+                "description": "Optional model choice key: free_default, free_worker, free_worker_2, paid_value, paid_flagship.",
             },
         },
         "required": ["goal"],
@@ -289,6 +289,8 @@ CEO_TASK_CREATE = {
             "risk_flags": {"type": "array", "items": {"type": "string"}, "description": "Risk flags: external, priced, irreversible, legal_or_financial, security, people, regulatory, reputation, outside_authority."},
             "parent_task_id": {"type": "string", "description": "Optional parent task ID for subtasks."},
             "metadata": {"type": "object", "description": "Extensible metadata."},
+            "tool_name": {"type": "string", "description": "Optional exact host tool this task will execute (Type 1 gate, Stage 1). Stored as the tool name only."},
+            "arguments": {"type": "object", "description": "Optional exact arguments for tool_name (Type 1 gate, Stage 1). Stored as a SHA-256 hash only — raw values are never stored. Approving the task mints a one-time ticket for this exact action."},
         },
         "required": ["run_id", "seat", "title"],
     },
@@ -343,6 +345,26 @@ CEO_TASK_ASSIGN = {
     },
 }
 
+CEO_TASK_COMPLETE = {
+    "name": "ceo_task_complete",
+    "description": (
+        "Mark a running task completed. Only a task in 'running' can be "
+        "completed — proposed/approved/assigned has not started, "
+        "blocked/failed goes back through running, and terminal states "
+        "(completed/verified/rejected) never move again. Completed is NOT "
+        "verified: verification is a separate step (completed -> verified) "
+        "and has no tool yet."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "Task UUID."},
+            "completed_by": {"type": "string", "description": "Who marked it complete (owner by default)."},
+        },
+        "required": ["task_id"],
+    },
+}
+
 CEO_RUN_CREATE = {
     "name": "ceo_run_create",
     "description": (
@@ -354,7 +376,7 @@ CEO_RUN_CREATE = {
         "properties": {
             "goal": {"type": "string", "description": "The orchestration goal."},
             "head_seat": {"type": "string", "description": "Seat that owns the run (default CEO)."},
-            "model_key": {"type": "string", "description": "Model choice key: free_default, free_fallback, free_worker, paid_value, paid_flagship."},
+            "model_key": {"type": "string", "description": "Model choice key: free_default, free_worker, free_worker_2, paid_value, paid_flagship."},
         },
         "required": ["goal"],
     },

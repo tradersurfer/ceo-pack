@@ -316,7 +316,7 @@ class InstallConfigApplied(unittest.TestCase):
     def test_all_declared_settings_are_applied(self):
         applied, notes = o.apply_install_config({
             "business_name": "Harbor Lane Coffee Co.", "owner_name": "Sam Rivera", "cost_mode": "paid_value",
-            "model_provider": "openrouter", "model_choice": "free_fallback", "head_seat": "COO", "head_profile": "ops-agent"})
+            "model_provider": "openrouter", "model_choice": "free_worker", "head_seat": "COO", "head_profile": "ops-agent"})
         self.assertEqual(notes, [])
         for k in ("business_name", "owner_name", "cost_mode", "model_provider", "model_choice", "head_seat", "head_profile"):
             self.assertIn(k, applied)
@@ -349,14 +349,14 @@ class InstallConfigApplied(unittest.TestCase):
         import json
         import tools
         o.apply_install_config({"business_name": "Harbor Lane Coffee Co.", "owner_name": "Sam Rivera",
-                                "cost_mode": "paid_value", "model_provider": "openrouter", "model_choice": "free_fallback"})
+                                "cost_mode": "paid_value", "model_provider": "openrouter", "model_choice": "free_worker"})
         brief = json.loads(tools.ceo_brief({"goal": "Grow subscriptions"}))
         self.assertEqual((brief["business_name"], brief["owner"]), ("Harbor Lane Coffee Co.", "Sam Rivera"))
         choice = json.loads(tools.ceo_choose_model({}))
         self.assertEqual(choice["provider_requested"], "openrouter")
         self.assertEqual(choice["recommended"]["key"], "paid_value")
         plan = json.loads(tools.ceo_orchestrate({"goal": "Grow subscriptions"}))
-        self.assertEqual(plan["model"]["key"], "free_fallback")
+        self.assertEqual(plan["model"]["key"], "free_worker")
         self.assertEqual(json.loads(tools.ceo_choose_model({"budget": "free"}))["recommended"]["key"], "free_default")
 
 

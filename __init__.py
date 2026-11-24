@@ -37,16 +37,27 @@ _SKILLS = [
     "ceo-pack-usage",
 ]
 
-def _on_pre_tool_call(tool_name=None, args=None, **kwargs):
-    """Owner-only approval guard: the model can never approve a Type 1 task.
+_GATE_OBSERVER = None  # gate._on_pre_tool_call, bound in register()
 
-    Approval is not a tool any more. If a stale schema or a hand-written call
-    names an approval tool anyway, block it.
+
+def _on_pre_tool_call(tool_name=None, args=None, **kwargs):
+    """The plugin's one pre_tool_call hook.
+
+    1. Owner-only approval guard: the model can never approve a Type 1 task.
+       Approval is not a tool any more; if a stale schema or a hand-written
+       call names an approval tool anyway, block it.
+    2. Type 1 gate, Stage 1 (warn/observe only): log what the gate WOULD
+       have stopped. The observer always returns None — it never blocks.
     """
     name = str(tool_name or "").lower()
     if name.startswith("ceo_") and "approve" in name:
         return {"action": "block",
                 "message": "Type 1 approval is owner-only. Ask the owner to approve in the CEO dashboard or with /task-approve."}
+    if _GATE_OBSERVER is not None:
+        try:
+            _GATE_OBSERVER(tool_name=tool_name, args=args, **kwargs)
+        except Exception:
+            logger.exception("CEO Pack gate observer failed for %s", tool_name)
     return None
 
 
@@ -66,8 +77,14 @@ def _task_approve_command(raw_args):
         return "That task does not need approval (it is not a Type 1 task)."
     if task.get("status") != "proposed":
         return f"That task is '{task.get('status')}', not 'proposed'. Only proposed tasks can be approved."
-    if tasks.approve_task(task_id, "owner", note="Type 1 approval granted (slash command)"):
-        return f"Approved: {task.get('title')}. It can now be assigned."
+    if tasks.approve_task(task_id, "owner", note="Type 1 approval granted (slash command)", minted_via="slash"):
+        stored = tasks.get_task(task_id) or {}
+        tool, digest = stored.get("action_tool"), stored.get("action_args_hash")
+        if tool and digest and tasks.get_live_token(task_id, tool, digest):
+            ticket = f" One-time ticket minted for {tool} (30 min, single use; warn mode — nothing is enforced yet)."
+        else:
+            ticket = " No action was recorded, so no ticket was minted."
+        return f"Approved: {task.get('title')}. It can now be assigned.{ticket}"
     return "Could not approve (the task may have just moved). Check its status."
 
 
@@ -312,6 +329,10 @@ def register(ctx):
         schema=schemas.CEO_TASK_ASSIGN, handler=tools.ceo_task_assign,
     )
     ctx.register_tool(
+        name="ceo_task_complete", toolset="ceo-pack",
+        schema=schemas.CEO_TASK_COMPLETE, handler=tools.ceo_task_complete,
+    )
+    ctx.register_tool(
         name="ceo_run_create", toolset="ceo-pack",
         schema=schemas.CEO_RUN_CREATE, handler=tools.ceo_run_create,
     )
@@ -322,6 +343,19 @@ def register(ctx):
 
     ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+
+    # --- Type 1 gate, Stage 1 (warn/observe only) ---
+    # pre_tool_call observes every tool call and logs what the gate WOULD
+    # have stopped. It never blocks and never consumes a ticket in Stage 1.
+    # Registration failure must not break the rest of the plugin.
+    # It runs inside _on_pre_tool_call (one hook per event for this plugin).
+    global _GATE_OBSERVER
+    try:
+        from . import gate as _gate
+        _GATE_OBSERVER = _gate._on_pre_tool_call
+        logger.info("CEO Pack Type 1 gate registered (Stage 1, warn/observe only)")
+    except Exception:
+        logger.exception("CEO Pack: Type 1 gate observer failed to load")
 
     # --- Skills ---
     skills_dir = Path(__file__).parent / "skills"
@@ -400,6 +434,8 @@ def register(ctx):
          "first read the user's words below and work out how to filter the list — by seat, status, or run, if the user said any"),
         ("task-assign", "ceo_task_assign", "Assign a task to an owner/profile",
          "first read the user's words below and work out which task and who owns it now"),
+        ("task-complete", "ceo_task_complete", "Mark a running task completed (completed, not verified)",
+         "first read the user's words below and work out which task to mark complete — only a task that is running can complete"),
         ("run-create", "ceo_run_create", "Create an orchestration run",
          "first read the user's words below and work out the goal for the run in one plain sentence"),
         ("run-status", "ceo_run_status", "Get run status and progress",

@@ -1,13 +1,11 @@
 name: ceo-pack
 version: 0.6.0
 manifest_version: 2
-description: CEO Pack gives you an AI C-suite inside Hermes. You say what your business needs in plain words, and the pack turns it into a plan — it works out which seat should own each job (money, legal, marketing, tech, operations, or the chief of staff), assigns it, and checks the work before calling it done. Anything big, priced, or hard to undo stops and asks for your approval first, so you stay the boss. v0.5.0 adds a dashboard tab, a persistent task registry, and delegation you can configure from chat. For developers — stdlib-only, no network calls and no model calls. The plugin routes and verifies work on your Hermes model, suggests a free model by default, and keeps every task, decision, and run in a local registry.
+description: CEO Pack gives you an AI C-suite inside Hermes. You say what your business needs in plain words, and the pack turns it into a plan — it works out which seat should own each job (money, legal, marketing, tech, operations, or the chief of staff), assigns it, and checks the work before calling it done. Anything big, priced, or hard to undo stops and asks for your approval first, so you stay the boss. v0.5.0 added a dashboard tab, a persistent task registry, and delegation you can configure from chat. v0.6.0 adds a chat panel per seat on the dashboard and a Type 1 gate on host tool calls (warn mode, nothing blocked yet). For developers — stdlib-only, no network calls and no model calls. The plugin routes and verifies work on your Hermes model, suggests a free model by default, and keeps every task, decision, and run in a local registry.
 author: tradersurfer93
 license: MIT
 requires_hermes: ">=0.23.0"
 thumbnail: assets/ceo-pack-cover-v060.webp
-requires_plugins:
-  - id: bot-forge
 provides_tools:
   - ceo_brief
   - ceo_assign

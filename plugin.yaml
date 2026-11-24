@@ -5,7 +5,7 @@ description: CEO Pack — a CEO orchestration layer for Hermes. Brief, route, pl
 author: tradersurfer93
 license: MIT
 requires_hermes: ">=0.23.0"
-thumbnail: assets/ceo-pack-cover-v060.png
+thumbnail: assets/ceo-pack-cover-v060.webp
 requires_plugins:
   - id: bot-forge
 provides_tools:

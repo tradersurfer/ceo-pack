@@ -4,7 +4,7 @@ Static guardrails (spec §11) on the shipped JS + a node harness for the
 vendored NDJSON JSON-RPC client (CeoChatWire), which is extracted from
 dashboard/dist/index.js between its BEGIN/END markers and exercised with a
 mock WebSocket. No browser exists in this repo, so the 12 manual live
-checks are owed on Adrian's laptop — they are NOT claimed here.
+checks are owed on the owner's laptop — they are NOT claimed here.
 
 Fictional data only; the Python tests read source files, no registry.
 """
@@ -119,7 +119,7 @@ class ChatBinStaticGuards(unittest.TestCase):
         self.assertIn("idempotency_key", src)
 
     def test_no_hidden_preamble_sent(self):
-        """Adrian's answer to question 5: no hidden CEO preamble in v1.
+        """the owner's answer to question 5: no hidden CEO preamble in v1.
         display_kind appears only as the transcript filter that SKIPS
         hidden rows — never as a send parameter."""
         src = INDEX_JS.read_text(encoding="utf-8")

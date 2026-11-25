@@ -5,15 +5,15 @@ Your AI C-suite inside Hermes. Say what your business needs in plain words — t
 > Created by **tradersurfer93**. Community plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent) by [Nous Research](https://nousresearch.com). MIT licensed.
 
 <p align="center">
-  <img src="./assets/ceo-pack-cover-v040.jpg" alt="CEO Pack cover — an AI C-suite inside Hermes" width="100%" />
+  <img src="./assets/ceo-pack-cover-v060.webp" alt="CEO Pack cover — an AI C-suite inside Hermes" width="100%" />
 </p>
 
 <p align="center">
-  <strong>v0.5.0 · Hermes 0.22.5+ · Dashboard tab + Desktop page · 22 tools · 30 slash commands</strong>
+  <strong>v0.6.0 · Hermes 0.23.0+ · Dashboard + chat bin + Desktop page · 21 tools</strong>
 </p>
 
 <p align="center">
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.5.0-orange" alt="Version 0.5.0" /></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.6.0-orange" alt="Version 0.6.0" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license" /></a>
   <a href="https://github.com/NousResearch/hermes-agent"><img src="https://img.shields.io/badge/built%20for-Hermes%20Agent-yellow" alt="Built for Hermes Agent" /></a>
   <a href="https://github.com/tradersurfer/ceo-pack"><img src="https://img.shields.io/badge/tier-community-blue" alt="Community tier" /></a>
@@ -36,6 +36,16 @@ CEO Pack is not a chat wrapper. It is an orchestration layer for Hermes: you tal
 
 The full list of changes per version lives in the [changelog](./CHANGELOG.md).
 
+## What's new in v0.6.0
+
+- **Chat bin** — a docked chat panel beside the board on all four dashboard tabs. Pick a seat, chat with its Hermes profile while you watch the work, and resume recent sessions with earlier history paged in. A seat with no profile falls back to the main agent wearing that seat's hat, and the panel says so in plain words.
+- **Dashboard redesign** — a command-center look with KPI cards, gold active tabs, a live agent activity panel, and board filter chips. Same API and same writes as before; the Desktop page matches the web view.
+- **Org chart on both surfaces** — the chart renders the full recursive tree from the roster, so new departments plug in without another redesign.
+- **Task lifecycle you can trust** — a new `ceo_task_complete` tool moves running tasks to completed through the enforced transition table. Completing a task never marks it verified; verification stays a separate step.
+- **Duplicate-safe assignment** — re-assigning the same task to the same owner is a no-op. Assigning it to a different owner is a conflict, and nothing is overwritten silently.
+- **Cost mode respected** — a model choice that conflicts with the cost mode is rejected with a clear message, never swapped silently.
+- **Type 1 gate, observe-only (Stage 1)** — approved tasks that name an exact action mint a one-time ticket for that call, and the host's tool calls are classified and logged for review. **Warn mode blocks nothing yet.** Blocking waits for the security review.
+
 ## Visual tour
 
 <!-- Screenshots live in assets/readme/ — drop real shots from the Dashboard tab and the Desktop page there (see "Screenshots" in docs/CATALOG_PR_v050.md). -->
@@ -53,13 +63,13 @@ The full list of changes per version lives in the [changelog](./CHANGELOG.md).
 
 ### 1. Install
 
-From the catalog (stable — serves v0.4.1 until v0.5.0 merges):
+From the Hermes catalog (it may lag behind the latest release):
 
 ```bash
 hermes plugins install ceo-pack --enable
 ```
 
-For v0.5.0 right now, install the branch:
+v0.6.0 is on `main`. Install it with:
 
 ```bash
 hermes plugins install https://github.com/tradersurfer/ceo-pack.git#v0.5.0-dev --enable
@@ -139,7 +149,7 @@ Each seat runs on a model route or a Hermes profile route, configured with `/ceo
 
 ## Tools
 
-22 tools, 30 slash commands. The chat tools:
+21 tools. The chat tools:
 
 | Group | Tools |
 |---|---|

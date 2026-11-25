@@ -10,7 +10,7 @@ These tests pin the execution-boundary behaviour:
 - the plugin's non-side-effect ceo_* tools are not execution;
 - an unflagged call to a tool that can change things leaves an
   "observed" row (tool + hash + session, never the arguments), which is
-  the watch data Adrian's answer #2 needs before the net is widened.
+  the watch data the owner's answer #2 needs before the net is widened.
 
 Warn mode only: nothing here blocks anything.
 """

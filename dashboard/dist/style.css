@@ -8,7 +8,7 @@
  * hardcoded palette: gold is --color-warning, teal is --color-accent,
  * green is --color-success, red is --color-destructive.
  *
- * v2.4 deepening (Adrian, Nov 20): the web tab already reads dark and
+ * v2.4 deepening (owner, Nov 20): the web tab already reads dark and
  * futuristic — this pass adds the glow layer: radial background glows,
  * gold glow on the crown title, gradient active tabs, glowing live dots,
  * soft accent glows on KPI cards and the live panel. Gradients are built

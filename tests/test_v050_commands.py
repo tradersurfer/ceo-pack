@@ -9,7 +9,7 @@ answers in plain words a business owner can follow.
 visible reply, so /ceo returns SHORT state messages ("CEO ON", "CEO
 OFF") and points the agent at the ceo-pack-usage skill, which carries
 the flow and the ELI5 rules. A long instruction prompt here showed up
-as a wall of text (Adrian, 2026-11-20).
+as a wall of text (owner, 2026-11-20).
 """
 
 import importlib.util

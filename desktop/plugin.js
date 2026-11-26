@@ -2,7 +2,7 @@
  * CEO Pack — Hermes Desktop half (v2.4: futuristic pass, Nov 20 —
  * page-scoped dark command-center palette + Live Agent Activity panel.
  *
- * Adrian's call (Nov 20, from his screenshots): the web tab had the Live
+ * the owner's call (Nov 20, from his screenshots): the web tab had the Live
  * Agent Activity panel and the dark look, Desktop had neither — and the
  * page looked washed out because the Desktop app runs light. The v2.3
  * reskin used the app's theme vars, so in light mode the page stayed

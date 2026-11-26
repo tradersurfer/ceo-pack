@@ -52,7 +52,7 @@ def _audit(
 
 # Hermes core tools that can change something outside the conversation
 # (toolsets.py _HERMES_CORE_TOOLS). Stage 1 OBSERVES unflagged calls to
-# these — it never classifies them Type 1 on the name alone (Adrian's
+# these — it never classifies them Type 1 on the name alone (the owner's
 # answer #2: narrow net; widen only if the watch shows real misses).
 _EFFECT_CAPABLE_CORE_TOOLS = frozenset({
     "terminal", "process_manage", "write_file", "patch", "execute_code",
@@ -77,7 +77,7 @@ def _orch():
 
 
 def _is_type1(tool_name: str, args: Any) -> bool:
-    """Narrow net (Adrian's answer #2), applied at the execution boundary:
+    """Narrow net (the owner's answer #2), applied at the execution boundary:
 
     - the plugin's own approval / side-effect tools are Type 1;
     - the plugin's other ceo_* tools plan, validate or record — they are

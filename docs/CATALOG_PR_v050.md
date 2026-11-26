@@ -1,6 +1,6 @@
 # Catalog PR prep — ceo-pack v0.5.0 (do NOT file yet)
 
-Adrian files this PR himself (or says go) after the v0.5.0-dev branch is pushed
+the owner files this PR himself (or says go) after the v0.5.0-dev branch is pushed
 and reviewed. One file changes in NousResearch/hermes-agent:
 `plugin-catalog/ceo-pack.yaml`. Same route as PR #155549 (v0.4.0) and #157203
 (v0.4.1): pencil-edit the file in the GitHub web UI (auto-forks), branch
@@ -23,7 +23,7 @@ image: https://raw.githubusercontent.com/tradersurfer/ceo-pack/9df6e4f13d37b830d
 
 `9df6e4f1...` is the HEAD of `v0.5.0-dev` after the command-fix bundle push (2026-11-20 ~00:48). Re-pin if the branch moves again before filing — the /ceo short-reply fix is built and verified but NOT pushed yet, so the SHA WILL move once more. Do NOT substitute the v0.4.1 sha (6331b08a) — the image must resolve at the pinned v0.5.0 commit.
 
-VERIFIED 2026-11-20 ~13:10: the `.jpg` URL above returns HTTP 200, `image/jpeg`, 447,488 bytes at `9df6e4f`. The `.webp` URL 404s at this SHA — Adrian renamed the cover to `.jpg` in commit `581f0b02` (2026-11-19 ~23:33 EST, "Rename cover to .jpg (JPEG bytes)"), so `.webp` no longer exists on the branch. The draft PR (`~/workspace/your_files/ceo-pack-v050-nous-pr-draft.md`) uses the `.jpg` URL. The local README already links the `.jpg` name — that line is now pushable, since the `.jpg` exists on the branch.
+VERIFIED 2026-11-20 ~13:10: the `.jpg` URL above returns HTTP 200, `image/jpeg`, 447,488 bytes at `9df6e4f`. The `.webp` URL 404s at this SHA — The owner renamed the cover to `.jpg` in commit `581f0b02` (2026-11-19 ~23:33 EST, "Rename cover to .jpg (JPEG bytes)"), so `.webp` no longer exists on the branch. The draft PR (`~/workspace/your_files/ceo-pack-v050-nous-pr-draft.md`) uses the `.jpg` URL. The local README already links the `.jpg` name — that line is now pushable, since the `.jpg` exists on the branch.
 
 ## Entry changes (vs the v0.4.1 entry, PR #157203)
 
@@ -40,9 +40,9 @@ VERIFIED 2026-11-20 ~13:10: the `.jpg` URL above returns HTTP 200, `image/jpeg`,
 - `requires_hermes`: `">=0.22.5"` (already the plugin.yaml value for v0.5.0;
   confirm against the entry — v0.4.1 said `>=0.21.6`).
 
-## The rename — DONE (Adrian, 2026-11-19 ~23:33 EST)
+## The rename — DONE (owner, 2026-11-19 ~23:33 EST)
 
-Adrian ran the one-liner: commit `581f0b02` "Rename cover to .jpg (JPEG bytes)" is on `v0.5.0-dev`. The branch now carries `assets/ceo-pack-cover-v040.jpg` (JPEG bytes, 1920x1280, 447,488 bytes) and NO `.webp` file — the `.webp` URL 404s at the current HEAD. The image: line uses `.jpg` (verified 200 at `9df6e4f`, Nov 20 ~13:10). The local README already links the `.jpg` name, so that line is now pushable.
+The owner ran the one-liner: commit `581f0b02` "Rename cover to .jpg (JPEG bytes)" is on `v0.5.0-dev`. The branch now carries `assets/ceo-pack-cover-v040.jpg` (JPEG bytes, 1920x1280, 447,488 bytes) and NO `.webp` file — the `.webp` URL 404s at the current HEAD. The image: line uses `.jpg` (verified 200 at `9df6e4f`, Nov 20 ~13:10). The local README already links the `.jpg` name, so that line is now pushable.
 
 ## Pre-flight (before filing)
 

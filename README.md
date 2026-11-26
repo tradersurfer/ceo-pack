@@ -56,7 +56,7 @@ The full list of changes per version lives in the [changelog](./CHANGELOG.md).
 
 ## Requirements
 
-- Hermes Agent 0.22.5 or later (tested on 0.23.1). The dashboard tab needs the web Dashboard; the Desktop page needs the Hermes Desktop app.
+- Hermes Agent 0.23.0 or later (tested on 0.23.1). The dashboard tab needs the web Dashboard; the Desktop page needs the Hermes Desktop app.
 - No extra services, no API keys, no paid models. The plugin is stdlib-only — it never calls a model itself and never touches the network. Your Hermes model does the work; the plugin recommends a pick per job.
 
 ## Quick start
@@ -72,7 +72,7 @@ hermes plugins install ceo-pack --enable
 v0.6.0 is on `main`. Install it with:
 
 ```bash
-hermes plugins install https://github.com/tradersurfer/ceo-pack.git#v0.5.0-dev --enable
+hermes plugins install https://github.com/tradersurfer/ceo-pack.git#main --enable
 hermes gateway restart
 ```
 
@@ -226,7 +226,7 @@ The goal comes from your words. Say what you are trying to achieve in one senten
 ## Development
 
 ```bash
-python -m unittest discover -s tests   # 317 tests
+python -m unittest discover -s tests   # 433 tests
 python demo/demo_flow.py                # demo, expect rc=0
 ```
 
